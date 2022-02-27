@@ -73,7 +73,7 @@ impl ParseResult {
     fn expect_formula(self) -> FormulaBuilder {
         match self {
             ParseResult::Formula(f) => f,
-            _ => panic!("Expecting formula")
+            _ => panic!("Expecting formula"),
         }
     }
 
@@ -179,7 +179,9 @@ impl<'a> Parser<'a> {
                         _ => return Ok(Token::Char('-')),
                     }
                 }
-                Some(c @ ('(' | ')' | '{' | '}' | ',' | ':' | ';' | '+' | '*' | '=' | '&' | '|')) => {
+                Some(
+                    c @ ('(' | ')' | '{' | '}' | ',' | ':' | ';' | '+' | '*' | '=' | '&' | '|'),
+                ) => {
                     self.inp = &self.inp[1..];
                     return Ok(Token::Char(c));
                 }
@@ -246,7 +248,12 @@ impl<'a> Parser<'a> {
         Ok(self.parse_term_or_line(g, ctx, false)?.expect_formula())
     }
 
-    fn parse_term_or_line(&mut self, g: &Globals, ctx: &Context, allow_line: bool) -> Result<ParseResult, ParseError> {
+    fn parse_term_or_line(
+        &mut self,
+        g: &Globals,
+        ctx: &Context,
+        allow_line: bool,
+    ) -> Result<ParseResult, ParseError> {
         let mut fb = FormulaBuilder::default();
         match self.token(ctx)? {
             Token::Number(n) => fb.push_literal_u32(g, n),
@@ -283,7 +290,7 @@ impl<'a> Parser<'a> {
                 if !allow_line {
                     return Err(ParseError::UnexpectedProofElement);
                 }
-                let (lines,t) = self.parse_script(g, ctx)?;
+                let (lines, t) = self.parse_script(g, ctx)?;
                 if t != Token::Char('}') {
                     return Err(ParseError::ExpectingToken(Token::Char('}')));
                 }
@@ -305,17 +312,20 @@ impl<'a> Parser<'a> {
                             fb.quantify_completed_free_var(g, &fb4, var, false);
                         }
                         ParseResult::Box(lines) => {
-                            return Ok(ParseResult::Forall(var, vec![
-                                Line::Imp(fb2.finish(g, ctx2.num_free_vars), Script::new(lines))
-                            ]));
+                            return Ok(ParseResult::Forall(
+                                var,
+                                vec![Line::Imp(
+                                    fb2.finish(g, ctx2.num_free_vars),
+                                    Script::new(lines),
+                                )],
+                            ));
                         }
-                        _ => return Err(ParseError::UnexpectedProofElement)
+                        _ => return Err(ParseError::UnexpectedProofElement),
                     }
-
                 }
                 Token::Word(_) => return Err(ParseError::AlreadyDefined),
                 _ => return Err(ParseError::ExpectingFreshName),
-            }
+            },
             Token::Exists => match self.token(ctx)? {
                 Token::UndefinedSymbol(x) => {
                     self.insist(ctx, Token::Char(':'))?;
@@ -368,8 +378,11 @@ impl<'a> Parser<'a> {
         ctx: &Context,
         tightness: Tightness,
     ) -> Result<(FormulaBuilder, Token), ParseError> {
-        let (r,t) = self.parse_formula_or_line(g, ctx, tightness, false)?;
-        Ok((r.expect_formula(), t.expect("Expected next token to be returned")))
+        let (r, t) = self.parse_formula_or_line(g, ctx, tightness, false)?;
+        Ok((
+            r.expect_formula(),
+            t.expect("Expected next token to be returned"),
+        ))
     }
 
     fn parse_formula_or_line(
@@ -399,7 +412,7 @@ impl<'a> Parser<'a> {
                 }
             }
         } else {
-            Ok((r,None))
+            Ok((r, None))
         }
     }
 
@@ -424,28 +437,24 @@ impl<'a> Parser<'a> {
     ) -> Result<(Vec<Line>, Token), ParseError> {
         let mut result = vec![];
         loop {
-            let (r,t) = self.parse_formula_or_line(g, ctx, Tightness::Formula, true)?;
+            let (r, t) = self.parse_formula_or_line(g, ctx, Tightness::Formula, true)?;
             match r {
                 ParseResult::Eof => return Ok((result, Token::Eof)),
                 ParseResult::CloseBrace => return Ok((result, Token::Char('}'))),
                 _ => {
                     result.push(r.into_line(g, ctx)?);
                     match t {
-                        None | Some(Token::Char(';')) => {},
-                        Some(tok @ (Token::Char('}') | Token::Eof)) => return Ok((result,tok)),
-                        _ => return Err(ParseError::ExpectingLineSeparator)
+                        None | Some(Token::Char(';')) => {}
+                        Some(tok @ (Token::Char('}') | Token::Eof)) => return Ok((result, tok)),
+                        _ => return Err(ParseError::ExpectingLineSeparator),
                     }
                 }
             }
         }
     }
 
-    fn parse_entire_script(
-        &mut self,
-        g: &Globals,
-        ctx: &Context,
-    ) -> Result<Script, ParseError> {
-        let (f,t) = self.parse_script(&g, &ctx)?;
+    fn parse_entire_script(&mut self, g: &Globals, ctx: &Context) -> Result<Script, ParseError> {
+        let (f, t) = self.parse_script(&g, &ctx)?;
         if t == Token::Eof {
             Ok(Script::new(f))
         } else {
@@ -454,7 +463,10 @@ impl<'a> Parser<'a> {
     }
 
     fn context(&self) -> String {
-        self.inp.get(..8.min(self.inp.len())).unwrap_or("").to_owned()
+        self.inp
+            .get(..8.min(self.inp.len()))
+            .unwrap_or("")
+            .to_owned()
     }
 }
 
@@ -468,12 +480,12 @@ pub fn parse(text: &str) -> Result<(Globals, Script), ErrorWithContext> {
     let g = Globals::default();
     let ctx = Context::new(&g);
     let mut parser = Parser::new(text);
-    let script = parser.parse_entire_script(&g, &ctx).map_err(|e| {
-        ErrorWithContext {
+    let script = parser
+        .parse_entire_script(&g, &ctx)
+        .map_err(|e| ErrorWithContext {
             e,
-            context: parser.context()
-        }
-    })?;
+            context: parser.context(),
+        })?;
     Ok((g, script))
 }
 

@@ -1,5 +1,5 @@
-use crate::globals::Globals;
 use crate::formula::{FormulaPackage, FreeVar};
+use crate::globals::Globals;
 
 pub struct Script {
     lines: Vec<Line>,
@@ -13,7 +13,7 @@ pub enum Line {
 
 impl Script {
     pub fn new(lines: Vec<Line>) -> Self {
-        Script{ lines }
+        Script { lines }
     }
 
     pub fn print(&self, g: &Globals, depth: usize) {

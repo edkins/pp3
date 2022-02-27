@@ -15,6 +15,6 @@ fn main() {
     let args = Args::parse();
     let text = fs::read_to_string(args.input).expect("Could not read file");
 
-    let (g,s) = parse::parse(&text).expect("Could not parse file");
+    let (g, s) = parse::parse(&text).expect("Could not parse file");
     s.print(&g, 0);
 }
