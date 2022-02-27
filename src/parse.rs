@@ -15,6 +15,8 @@ enum Token {
     Eof,
     Char(char),
     Arrow,
+    Forall,
+    Exists,
 }
 
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
@@ -31,9 +33,11 @@ enum ParseError {
     ExpectingEof,
     ExpectingFreshName,
     ExpectingTerm,
+    ExpectingType,
     JunkAfterNumber(char),
     NumberTooBig,
     TooManyFreeVars,
+    TypeMustBeUnary,
 }
 
 struct Context {
@@ -132,7 +136,7 @@ impl<'a> Parser<'a> {
                         _ => return Ok(Token::Char('-'))
                     }
                 }
-                Some(c @ ('(' | ')' | ',' | '@' | '#' | '.' | '+' | '*' | '=' | '&' | '|')) => {
+                Some(c @ ('(' | ')' | ',' | ':' | '+' | '*' | '=' | '&' | '|')) => {
                     self.inp = &self.inp[1..];
                     return Ok(Token::Char(c));
                 }
@@ -146,9 +150,13 @@ impl<'a> Parser<'a> {
                             _ => {
                                 let word = &self.inp[..len];
                                 self.inp = &self.inp[len..];
-                                return match ctx.get(word) {
-                                    Some(w) => Ok(Token::Word(w)),
-                                    None => Ok(Token::UndefinedSymbol(word.to_owned())),
+                                return match word {
+                                    "forall" => Ok(Token::Forall),
+                                    "exists" => Ok(Token::Exists),
+                                    _ => match ctx.get(word) {
+                                        Some(w) => Ok(Token::Word(w)),
+                                        None => Ok(Token::UndefinedSymbol(word.to_owned())),
+                                    }
                                 };
                             }
                         }
@@ -164,6 +172,26 @@ impl<'a> Parser<'a> {
             return Ok(());
         }
         Err(ParseError::ExpectingToken(t))
+    }
+
+    /**
+     * Pushes an incomplete formula with one term left.
+     *
+     * So you can push onto it whatever it is that you want to check the type of.
+     */
+    fn parse_type_onto(&mut self, fb: &mut FormulaBuilder, g: &Globals, ctx: &Context) -> Result<(), ParseError> {
+        match self.token(ctx)? {
+            Token::Word(Word::Global(sym)) => {
+                let arity = g.get_arity(sym);
+                if arity == 1 {
+                    fb.push_global(g, sym);
+                    Ok(())
+                } else {
+                    Err(ParseError::TypeMustBeUnary)
+                }
+            }
+            _ => Err(ParseError::ExpectingType)
+        }
     }
 
     fn parse_term(&mut self, g: &Globals, ctx: &Context) -> Result<FormulaBuilder, ParseError> {
@@ -201,14 +229,21 @@ impl<'a> Parser<'a> {
                     return Err(ParseError::ExpectingToken(Token::Char(')')));
                 }
             }
-            Token::Char(c @ ('@' | '#')) => {
+            t @ (Token::Forall | Token::Exists) => {
                 match self.token(ctx)? {
                     Token::UndefinedSymbol(x) => {
-                        let existential = c == '#';
-                        self.insist(ctx, Token::Char('.'))?;
+                        self.insist(ctx, Token::Char(':'))?;
                         let (ctx2, var) = ctx.with_free_var(x)?;
-                        let f = self.parse_term(g, &ctx2)?;
-                        fb.quantify_completed_free_var(g, &f, var, existential);
+                        let mut fb2 = FormulaBuilder::default();
+                        fb2.push_global(g, match t {
+                            Token::Forall => globals::IMP,
+                            Token::Exists => globals::AND,
+                            _ => unreachable!()
+                        });
+                        self.parse_type_onto(&mut fb2, g, &ctx)?;
+                        fb2.push_free_var(g, var);
+                        self.parse_formula_onto(&mut fb2, g, &ctx2, Tightness::Cmp)?;
+                        fb.quantify_completed_free_var(g, &fb2, var, t == Token::Exists);
                     }
                     Token::Word(_) => return Err(ParseError::AlreadyDefined),
                     _ => return Err(ParseError::ExpectingFreshName)
@@ -345,8 +380,17 @@ mod test {
     fn forall() {
         let g = &Globals::default();
         let ctx = &Context::new(g);
-        let mut p = Parser::new("@x.(x=x)");
+        let mut p = Parser::new("forall x:nat x=x");
         let f = p.parse_entire_formula(g, ctx).unwrap();
-        assert_eq!(f.to_string(g), "@b0.eq(b0,b0)");
+        assert_eq!(f.to_string(g), "@b0.imp(nat(b0),eq(b0,b0))");
+    }
+
+    #[test]
+    fn exists() {
+        let g = &Globals::default();
+        let ctx = &Context::new(g);
+        let mut p = Parser::new("exists x:nat x=x");
+        let f = p.parse_entire_formula(g, ctx).unwrap();
+        assert_eq!(f.to_string(g), "#b0.and(nat(b0),eq(b0,b0))");
     }
 }

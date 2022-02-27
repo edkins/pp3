@@ -25,9 +25,10 @@ pub const AND:GlobalSymbol = GlobalSymbol::new(3);
 pub const OR:GlobalSymbol = GlobalSymbol::new(4);
 pub const NOT:GlobalSymbol = GlobalSymbol::new(5);
 pub const EQ:GlobalSymbol = GlobalSymbol::new(6);
-pub const ADD:GlobalSymbol = GlobalSymbol::new(7);
-pub const MUL:GlobalSymbol = GlobalSymbol::new(8);
-pub const PRELUDE_MAX:usize = 9;
+pub const NAT:GlobalSymbol = GlobalSymbol::new(7);
+pub const ADD:GlobalSymbol = GlobalSymbol::new(8);
+pub const MUL:GlobalSymbol = GlobalSymbol::new(9);
+pub const PRELUDE_MAX:usize = 10;
 
 pub struct Globals {
     globals: Vec<GlobalInfo>,
@@ -49,6 +50,7 @@ impl Default for Globals {
         globals[OR.index()] = GlobalInfo{arity:2, name:"or".to_owned()};
         globals[NOT.index()] = GlobalInfo{arity:1, name:"not".to_owned()};
         globals[EQ.index()] = GlobalInfo{arity:2, name:"eq".to_owned()};
+        globals[NAT.index()] = GlobalInfo{arity:1, name:"nat".to_owned()};
         globals[ADD.index()] = GlobalInfo{arity:2, name:"add".to_owned()};
         globals[MUL.index()] = GlobalInfo{arity:2, name:"mul".to_owned()};
         Globals {
