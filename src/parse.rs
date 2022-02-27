@@ -8,7 +8,7 @@ struct Parser<'a> {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-enum Token {
+pub enum Token {
     Number(u32),
     Word(Word),
     UndefinedSymbol(String),
@@ -20,13 +20,13 @@ enum Token {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Word {
+pub enum Word {
     Global(GlobalSymbol),
     FreeVar(FreeVar),
 }
 
 #[derive(Debug)]
-enum ParseError {
+pub enum ParseError {
     AlreadyDefined,
     BadChar(char),
     ExpectingToken(Token),
@@ -229,10 +229,8 @@ impl<'a> Parser<'a> {
                             if t != Token::Char(')') {
                                 return Err(ParseError::ExpectingToken(Token::Char(')')));
                             }
-                        } else {
-                            if t != Token::Char(',') {
-                                return Err(ParseError::ExpectingToken(Token::Char(',')));
-                            }
+                        } else if t != Token::Char(',') {
+                            return Err(ParseError::ExpectingToken(Token::Char(',')));
                         }
                     }
                 }
@@ -259,7 +257,7 @@ impl<'a> Parser<'a> {
                             _ => unreachable!(),
                         },
                     );
-                    self.parse_type_onto(&mut fb2, g, &ctx)?;
+                    self.parse_type_onto(&mut fb2, g, ctx)?;
                     fb2.push_free_var(g, var);
                     self.parse_formula_onto(&mut fb2, g, &ctx2, Tightness::Cmp)?;
                     fb.quantify_completed_free_var(g, &fb2, var, t == Token::Exists);
@@ -322,6 +320,14 @@ impl<'a> Parser<'a> {
         }
         Ok(fb)
     }
+}
+
+pub fn parse(text: &str) -> Result<(Globals, FormulaBuilder), ParseError> {
+    let g = Globals::default();
+    let ctx = Context::new(&g);
+    let mut parser = Parser::new(text);
+    let f = parser.parse_entire_formula(&g, &ctx)?;
+    Ok((g,f))
 }
 
 #[cfg(test)]

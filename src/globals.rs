@@ -102,7 +102,7 @@ impl Globals {
     }
 
     pub fn count(&self) -> u32 {
-        return self.globals.len() as u32;
+        self.globals.len() as u32
     }
 
     pub fn get_arity(&self, sym: GlobalSymbol) -> u32 {
