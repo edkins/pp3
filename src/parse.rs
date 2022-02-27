@@ -260,10 +260,7 @@ impl<'a> Parser<'a> {
             Token::Word(Word::Global(sym)) => {
                 fb.push_global(g, sym);
                 let arity = g.get_arity(sym);
-                if arity == 0 {
-                    self.insist(ctx, Token::Char('('))?;
-                    self.insist(ctx, Token::Char(')'))?;
-                } else {
+                if arity != 0 {
                     self.insist(ctx, Token::Char('('))?;
                     for i in 0..arity {
                         let t = self.parse_formula_onto(&mut fb, g, ctx, Tightness::Formula)?;
