@@ -34,6 +34,7 @@ pub enum ParseError {
     ExpectingToken(Token),
     ExpectingEof,
     ExpectingFreshName,
+    ExpectingLineSeparator,
     ExpectingTerm,
     ExpectingType,
     JunkAfterNumber(char),
@@ -41,7 +42,6 @@ pub enum ParseError {
     TooManyFreeVars,
     TypeMustBeUnary,
     UnexpectedProofElement,
-    UnqualifiedBox,
 }
 
 struct Context {
@@ -65,6 +65,8 @@ enum ParseResult {
     Forall(FreeVar, Vec<Line>),
     Imp(FormulaPackage, Vec<Line>),
     Box(Vec<Line>),
+    Eof,
+    CloseBrace,
 }
 
 impl ParseResult {
@@ -72,6 +74,15 @@ impl ParseResult {
         match self {
             ParseResult::Formula(f) => f,
             _ => panic!("Expecting formula")
+        }
+    }
+
+    fn into_line(self, g: &Globals, ctx: &Context) -> Result<Line, ParseError> {
+        match self {
+            ParseResult::Formula(f) => Ok(Line::Formula(f.finish(g, ctx.num_free_vars))),
+            ParseResult::Forall(x, lines) => Ok(Line::Forall(x, Script::new(lines))),
+            ParseResult::Imp(hyp, lines) => Ok(Line::Imp(hyp, Script::new(lines))),
+            _ => Err(ParseError::UnexpectedProofElement),
         }
     }
 }
@@ -320,6 +331,20 @@ impl<'a> Parser<'a> {
                 Token::Word(_) => return Err(ParseError::AlreadyDefined),
                 _ => return Err(ParseError::ExpectingFreshName),
             },
+            Token::Char('}') => {
+                if allow_line {
+                    return Ok(ParseResult::CloseBrace);
+                } else {
+                    return Err(ParseError::ExpectingTerm);
+                }
+            }
+            Token::Eof => {
+                if allow_line {
+                    return Ok(ParseResult::Eof);
+                } else {
+                    return Err(ParseError::ExpectingTerm);
+                }
+            }
             _ => return Err(ParseError::ExpectingTerm),
         }
         Ok(ParseResult::Formula(fb))
@@ -344,7 +369,7 @@ impl<'a> Parser<'a> {
         tightness: Tightness,
     ) -> Result<(FormulaBuilder, Token), ParseError> {
         let (r,t) = self.parse_formula_or_line(g, ctx, tightness, false)?;
-        Ok((r.expect_formula(), t))
+        Ok((r.expect_formula(), t.expect("Expected next token to be returned")))
     }
 
     fn parse_formula_or_line(
@@ -353,8 +378,8 @@ impl<'a> Parser<'a> {
         ctx: &Context,
         tightness: Tightness,
         allow_line: bool,
-    ) -> Result<(ParseResult, Token), ParseError> {
-        let mut r = self.parse_term_or_line(g, ctx, allow_line)?;
+    ) -> Result<(ParseResult, Option<Token>), ParseError> {
+        let r = self.parse_term_or_line(g, ctx, allow_line)?;
         if let ParseResult::Formula(mut fb) = r {
             let mut t = self.token(ctx)?;
             loop {
@@ -367,14 +392,14 @@ impl<'a> Parser<'a> {
                             fb.push_completed_builder(g, &fb2 /* used to be called fb */);
                             t = self.parse_formula_onto(&mut fb, g, ctx, nextt)?;
                         } else {
-                            return Ok((ParseResult::Formula(fb), t));
+                            return Ok((ParseResult::Formula(fb), Some(t)));
                         }
                     }
-                    None => return Ok((ParseResult::Formula(fb), t)),
+                    None => return Ok((ParseResult::Formula(fb), Some(t))),
                 }
             }
         } else {
-            Ok((r, self.token(ctx)?))
+            Ok((r,None))
         }
     }
 
@@ -399,31 +424,57 @@ impl<'a> Parser<'a> {
     ) -> Result<(Vec<Line>, Token), ParseError> {
         let mut result = vec![];
         loop {
-            let (r, t) = self.parse_formula_or_line(g, ctx, Tightness::Formula, true)?;
-            let line = match r {
-                ParseResult::Formula(fb) => Line::Formula(fb.finish(g, ctx.num_free_vars)),
-                ParseResult::Forall(x, lines) => Line::Forall(x, Script::new(lines)),
-                ParseResult::Imp(hyp, lines) => Line::Imp(hyp, Script::new(lines)),
-                ParseResult::Box(_) => return Err(ParseError::UnqualifiedBox),
-            };
-            result.push(line);
-            if t != Token::Char(';') {
-                return Ok((result, t));
+            let (r,t) = self.parse_formula_or_line(g, ctx, Tightness::Formula, true)?;
+            match r {
+                ParseResult::Eof => return Ok((result, Token::Eof)),
+                ParseResult::CloseBrace => return Ok((result, Token::Char('}'))),
+                _ => {
+                    result.push(r.into_line(g, ctx)?);
+                    match t {
+                        None | Some(Token::Char(';')) => {},
+                        Some(tok @ (Token::Char('}') | Token::Eof)) => return Ok((result,tok)),
+                        _ => return Err(ParseError::ExpectingLineSeparator)
+                    }
+                }
             }
         }
     }
+
+    fn parse_entire_script(
+        &mut self,
+        g: &Globals,
+        ctx: &Context,
+    ) -> Result<Script, ParseError> {
+        let (f,t) = self.parse_script(&g, &ctx)?;
+        if t == Token::Eof {
+            Ok(Script::new(f))
+        } else {
+            Err(ParseError::ExpectingEof)
+        }
+    }
+
+    fn context(&self) -> String {
+        self.inp.get(..8.min(self.inp.len())).unwrap_or("").to_owned()
+    }
 }
 
-pub fn parse(text: &str) -> Result<(Globals, Script), ParseError> {
+#[derive(Debug)]
+pub struct ErrorWithContext {
+    e: ParseError,
+    context: String,
+}
+
+pub fn parse(text: &str) -> Result<(Globals, Script), ErrorWithContext> {
     let g = Globals::default();
     let ctx = Context::new(&g);
     let mut parser = Parser::new(text);
-    let (f,t) = parser.parse_script(&g, &ctx)?;
-    if t == Token::Eof {
-        Ok((g,Script::new(f)))
-    } else {
-        Err(ParseError::ExpectingEof)
-    }
+    let script = parser.parse_entire_script(&g, &ctx).map_err(|e| {
+        ErrorWithContext {
+            e,
+            context: parser.context()
+        }
+    })?;
+    Ok((g, script))
 }
 
 #[cfg(test)]
