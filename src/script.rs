@@ -25,7 +25,7 @@ impl Script {
             match line {
                 Line::Formula(f) => println!("{spaces}{}", f.formula().to_string(g)),
                 Line::Forall(x, script) => {
-                    println!("{spaces}forall {} {{", x.to_string());
+                    println!("{spaces}forall {x} {{");
                     script.print(g, depth + 1);
                     println!("{spaces}}}");
                 }

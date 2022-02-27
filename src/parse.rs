@@ -454,7 +454,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_entire_script(&mut self, g: &Globals, ctx: &Context) -> Result<Script, ParseError> {
-        let (f, t) = self.parse_script(&g, &ctx)?;
+        let (f, t) = self.parse_script(g, ctx)?;
         if t == Token::Eof {
             Ok(Script::new(f))
         } else {

@@ -1,4 +1,5 @@
 use crate::globals::{GlobalSymbol, Globals};
+use std::fmt;
 
 /**
  * The top 8 bits of an item define its kind.
@@ -94,9 +95,11 @@ impl FreeVar {
     fn item(&self) -> u32 {
         FREEVAR | self.var
     }
+}
 
-    pub fn to_string(&self) -> String {
-        freevar_name(self.var)
+impl fmt::Display for FreeVar {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", freevar_name(self.var))
     }
 }
 
