@@ -1,4 +1,4 @@
-use crate::globals::{Globals, GlobalSymbol};
+use crate::globals::{GlobalSymbol, Globals};
 
 /**
  * The top 8 bits of an item define its kind.
@@ -14,48 +14,48 @@ use crate::globals::{Globals, GlobalSymbol};
  * }
  * ```
  */
-const KIND:u32 = 0xff00_0000;
+const KIND: u32 = 0xff00_0000;
 
 /**
  * The bottom 24 bits of an item define further details, the meaning of which
  * are dependent on the kind.
  */
-const DETAIL:u32 = 0x00ff_ffff;
+const DETAIL: u32 = 0x00ff_ffff;
 
 /**
  * An unsigned integer, at most 0x00ffffff
  */
-const LITERAL:u32 = 0x0100_0000;
+const LITERAL: u32 = 0x0100_0000;
 
 /**
  * A bound variable. The detail defines which it is (where 0 is the innermost variable).
  */
-const BOUNDVAR:u32 = 0x0300_0000;
+const BOUNDVAR: u32 = 0x0300_0000;
 
 /**
  * A free variable.
  */
-const FREEVAR:u32 = 0x0400_0000;
+const FREEVAR: u32 = 0x0400_0000;
 
 /**
  * A global symbol.
  */
-const GLOBAL:u32 = 0x0500_0000;
+const GLOBAL: u32 = 0x0500_0000;
 
 /**
  * A "forall" block. The detail is always 0.
  */
-const FORALL:u32 = 0x0600_0000;
+const FORALL: u32 = 0x0600_0000;
 
 /**
  * An "exists" block. The detail is always 0.
  */
-const EXISTS:u32 = 0x0700_0000;
+const EXISTS: u32 = 0x0700_0000;
 
 /**
  * The end of a "forall" or "exists" block. The detail is always 0.
  */
-const SCOPEEND:u32 = 0x0800_0000;
+const SCOPEEND: u32 = 0x0800_0000;
 
 pub struct FormulaBuilder {
     vec: Vec<u32>,
@@ -63,7 +63,7 @@ pub struct FormulaBuilder {
 }
 
 pub struct Formula<'a> {
-    slice: &'a[u32],
+    slice: &'a [u32],
 }
 
 pub struct FormulaPackage {
@@ -71,21 +71,19 @@ pub struct FormulaPackage {
     num_free_vars: u32,
 }
 
-#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FreeVar {
-    var:u32,
+    var: u32,
 }
 
 impl FormulaPackage {
     fn formula(&self) -> Formula<'_> {
-        Formula {
-            slice: &self.vec,
-        }
+        Formula { slice: &self.vec }
     }
 }
 
 impl FreeVar {
-    pub fn new(var:u32) -> Self {
+    pub fn new(var: u32) -> Self {
         if var <= DETAIL {
             FreeVar { var }
         } else {
@@ -115,7 +113,12 @@ fn freevar_name(i: u32) -> String {
     format!("f{}", i)
 }
 
-fn slice_to_string<'a>(result: &mut String, mut slice: &'a[u32], g: &Globals, depth: u32) -> &'a[u32] {
+fn slice_to_string<'a>(
+    result: &mut String,
+    mut slice: &'a [u32],
+    g: &Globals,
+    depth: u32,
+) -> &'a [u32] {
     let item = slice[0];
     let d = item & DETAIL;
     slice = &slice[1..];
@@ -125,7 +128,9 @@ fn slice_to_string<'a>(result: &mut String, mut slice: &'a[u32], g: &Globals, de
             slice
         }
         BOUNDVAR => {
-            result.push_str(&boundvar_name(depth.checked_sub(1+d).expect("Bound var out of range")));
+            result.push_str(&boundvar_name(
+                depth.checked_sub(1 + d).expect("Bound var out of range"),
+            ));
             slice
         }
         FREEVAR => {
@@ -165,7 +170,7 @@ fn slice_to_string<'a>(result: &mut String, mut slice: &'a[u32], g: &Globals, de
             }
             &slice[1..]
         }
-        _ => panic!("Unexpected kind")
+        _ => panic!("Unexpected kind"),
     }
 }
 
@@ -186,7 +191,7 @@ impl FormulaBuilder {
         slice_to_string(&mut result, &self.vec, g, 0);
         result
     }
-    
+
     pub fn push_formula(&mut self, _g: &Globals, f: Formula<'_>) {
         if self.terms_remaining == 0 {
             panic!("No terms remaining");
@@ -215,7 +220,9 @@ impl FormulaBuilder {
             panic!("Global sym out of range");
         }
         self.vec.push(GLOBAL | sym);
-        self.terms_remaining = (self.terms_remaining - 1).checked_add(g.get_arity(gsym)).expect("Too many terms remaining");
+        self.terms_remaining = (self.terms_remaining - 1)
+            .checked_add(g.get_arity(gsym))
+            .expect("Too many terms remaining");
     }
 
     pub fn push_literal_u32(&mut self, _g: &Globals, n: u32) {
@@ -229,7 +236,7 @@ impl FormulaBuilder {
         self.terms_remaining -= 1;
     }
 
-    pub fn push_free_var(&mut self, _g: &Globals, var:FreeVar) {
+    pub fn push_free_var(&mut self, _g: &Globals, var: FreeVar) {
         if self.terms_remaining == 0 {
             panic!("No terms remaining");
         }
@@ -237,7 +244,13 @@ impl FormulaBuilder {
         self.terms_remaining -= 1;
     }
 
-    pub fn subst_free_var(&mut self, _g: &Globals, f: Formula<'_>, var:FreeVar, value:Formula<'_>) {
+    pub fn subst_free_var(
+        &mut self,
+        _g: &Globals,
+        f: Formula<'_>,
+        var: FreeVar,
+        value: Formula<'_>,
+    ) {
         if self.terms_remaining == 0 {
             panic!("No terms remaining");
         }
@@ -252,18 +265,30 @@ impl FormulaBuilder {
         self.terms_remaining -= 1;
     }
 
-    pub fn quantify_free_var(&mut self, _g: &Globals, f: Formula<'_>, var:FreeVar, existential:bool) {
+    pub fn quantify_free_var(
+        &mut self,
+        _g: &Globals,
+        f: Formula<'_>,
+        var: FreeVar,
+        existential: bool,
+    ) {
         self.quantify_from_slice(f.slice, var, existential)
     }
 
-    pub fn quantify_completed_free_var(&mut self, _g: &Globals, f: &FormulaBuilder, var:FreeVar, existential:bool) {
+    pub fn quantify_completed_free_var(
+        &mut self,
+        _g: &Globals,
+        f: &FormulaBuilder,
+        var: FreeVar,
+        existential: bool,
+    ) {
         if f.terms_remaining != 0 {
             panic!("Still terms remaining");
         }
         self.quantify_from_slice(&f.vec, var, existential)
     }
 
-    fn quantify_from_slice(&mut self, slice: &[u32], var:FreeVar, existential:bool) {
+    fn quantify_from_slice(&mut self, slice: &[u32], var: FreeVar, existential: bool) {
         if self.terms_remaining == 0 {
             panic!("No terms remaining");
         }
@@ -303,7 +328,7 @@ impl FormulaBuilder {
         self.terms_remaining -= 1;
     }
 
-    pub fn finish(self, _g:&Globals, num_free_vars: u32) -> FormulaPackage {
+    pub fn finish(self, _g: &Globals, num_free_vars: u32) -> FormulaPackage {
         if self.terms_remaining != 0 {
             panic!("Still remaining terms");
         }
@@ -451,7 +476,7 @@ mod tests {
         let pkg = fb.finish(g, 0);
         assert_eq!(&pkg.formula().to_string(g), "123");
     }
-    
+
     #[test]
     fn print_free() {
         let mut fb = FormulaBuilder::default();
@@ -522,6 +547,9 @@ mod tests {
         let mut fb = FormulaBuilder::default();
         fb.quantify_free_var(g, pkg2.formula(), x, false);
         let pkg = fb.finish(g, 0);
-        assert_eq!(&pkg.formula().to_string(g), "@b0.imp(eq(b0,b0),#b1.eq(b0,b1))");
+        assert_eq!(
+            &pkg.formula().to_string(g),
+            "@b0.imp(eq(b0,b0),#b1.eq(b0,b1))"
+        );
     }
 }

@@ -1,5 +1,5 @@
 use crate::formula::{FormulaBuilder, FreeVar};
-use crate::globals::{Globals, GlobalSymbol, self};
+use crate::globals::{self, GlobalSymbol, Globals};
 use std::collections::HashMap;
 use std::mem;
 
@@ -7,7 +7,7 @@ struct Parser<'a> {
     inp: &'a str,
 }
 
-#[derive(Debug,Eq,PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 enum Token {
     Number(u32),
     Word(Word),
@@ -19,7 +19,7 @@ enum Token {
     Exists,
 }
 
-#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Word {
     Global(GlobalSymbol),
     FreeVar(FreeVar),
@@ -45,7 +45,7 @@ struct Context {
     num_free_vars: u32,
 }
 
-#[derive(Eq,Ord,PartialEq,PartialOrd)]
+#[derive(Eq, Ord, PartialEq, PartialOrd)]
 enum Tightness {
     Formula,
     Or,
@@ -79,7 +79,10 @@ impl Context {
             }
             map.insert(name.to_owned(), Word::Global(sym));
         }
-        Context{ map, num_free_vars: 0 }
+        Context {
+            map,
+            num_free_vars: 0,
+        }
     }
 
     fn get(&self, x: &str) -> Option<Word> {
@@ -96,13 +99,19 @@ impl Context {
         }
         let x = FreeVar::new(self.num_free_vars);
         map.insert(name, Word::FreeVar(x));
-        Ok((Context{ map, num_free_vars: self.num_free_vars + 1 }, x))
+        Ok((
+            Context {
+                map,
+                num_free_vars: self.num_free_vars + 1,
+            },
+            x,
+        ))
     }
 }
 
 impl<'a> Parser<'a> {
     fn new(inp: &'a str) -> Self {
-        Parser{ inp }
+        Parser { inp }
     }
 
     fn token(&mut self, ctx: &Context) -> Result<Token, ParseError> {
@@ -112,17 +121,20 @@ impl<'a> Parser<'a> {
                 Some(' ' | '\t' | '\r' | '\n') => self.inp = &self.inp[1..],
                 Some(c @ '0'..='9') => {
                     self.inp = &self.inp[1..];
-                    let mut n:u32 = (c as u32) - ('0' as u32);
+                    let mut n: u32 = (c as u32) - ('0' as u32);
                     loop {
                         match self.inp.chars().next() {
                             Some(c @ '0'..='9') => {
-                                n = n.checked_mul(10).and_then(|n| n.checked_add((c as u32) - ('0' as u32))).ok_or(ParseError::NumberTooBig)?;
+                                n = n
+                                    .checked_mul(10)
+                                    .and_then(|n| n.checked_add((c as u32) - ('0' as u32)))
+                                    .ok_or(ParseError::NumberTooBig)?;
                                 self.inp = &self.inp[1..];
                             }
                             Some(c @ ('a'..='z' | 'A'..='Z' | '_')) => {
                                 return Err(ParseError::JunkAfterNumber(c))
                             }
-                            _ => return Ok(Token::Number(n))
+                            _ => return Ok(Token::Number(n)),
                         }
                     }
                 }
@@ -133,7 +145,7 @@ impl<'a> Parser<'a> {
                             self.inp = &self.inp[1..];
                             return Ok(Token::Arrow);
                         }
-                        _ => return Ok(Token::Char('-'))
+                        _ => return Ok(Token::Char('-')),
                     }
                 }
                 Some(c @ ('(' | ')' | ',' | ':' | '+' | '*' | '=' | '&' | '|')) => {
@@ -156,13 +168,13 @@ impl<'a> Parser<'a> {
                                     _ => match ctx.get(word) {
                                         Some(w) => Ok(Token::Word(w)),
                                         None => Ok(Token::UndefinedSymbol(word.to_owned())),
-                                    }
+                                    },
                                 };
                             }
                         }
                     }
                 }
-                Some(c) => return Err(ParseError::BadChar(c))
+                Some(c) => return Err(ParseError::BadChar(c)),
             }
         }
     }
@@ -179,7 +191,12 @@ impl<'a> Parser<'a> {
      *
      * So you can push onto it whatever it is that you want to check the type of.
      */
-    fn parse_type_onto(&mut self, fb: &mut FormulaBuilder, g: &Globals, ctx: &Context) -> Result<(), ParseError> {
+    fn parse_type_onto(
+        &mut self,
+        fb: &mut FormulaBuilder,
+        g: &Globals,
+        ctx: &Context,
+    ) -> Result<(), ParseError> {
         match self.token(ctx)? {
             Token::Word(Word::Global(sym)) => {
                 let arity = g.get_arity(sym);
@@ -190,7 +207,7 @@ impl<'a> Parser<'a> {
                     Err(ParseError::TypeMustBeUnary)
                 }
             }
-            _ => Err(ParseError::ExpectingType)
+            _ => Err(ParseError::ExpectingType),
         }
     }
 
@@ -229,43 +246,55 @@ impl<'a> Parser<'a> {
                     return Err(ParseError::ExpectingToken(Token::Char(')')));
                 }
             }
-            t @ (Token::Forall | Token::Exists) => {
-                match self.token(ctx)? {
-                    Token::UndefinedSymbol(x) => {
-                        self.insist(ctx, Token::Char(':'))?;
-                        let (ctx2, var) = ctx.with_free_var(x)?;
-                        let mut fb2 = FormulaBuilder::default();
-                        fb2.push_global(g, match t {
+            t @ (Token::Forall | Token::Exists) => match self.token(ctx)? {
+                Token::UndefinedSymbol(x) => {
+                    self.insist(ctx, Token::Char(':'))?;
+                    let (ctx2, var) = ctx.with_free_var(x)?;
+                    let mut fb2 = FormulaBuilder::default();
+                    fb2.push_global(
+                        g,
+                        match t {
                             Token::Forall => globals::IMP,
                             Token::Exists => globals::AND,
-                            _ => unreachable!()
-                        });
-                        self.parse_type_onto(&mut fb2, g, &ctx)?;
-                        fb2.push_free_var(g, var);
-                        self.parse_formula_onto(&mut fb2, g, &ctx2, Tightness::Cmp)?;
-                        fb.quantify_completed_free_var(g, &fb2, var, t == Token::Exists);
-                    }
-                    Token::Word(_) => return Err(ParseError::AlreadyDefined),
-                    _ => return Err(ParseError::ExpectingFreshName)
+                            _ => unreachable!(),
+                        },
+                    );
+                    self.parse_type_onto(&mut fb2, g, &ctx)?;
+                    fb2.push_free_var(g, var);
+                    self.parse_formula_onto(&mut fb2, g, &ctx2, Tightness::Cmp)?;
+                    fb.quantify_completed_free_var(g, &fb2, var, t == Token::Exists);
                 }
-            }
-            _ => return Err(ParseError::ExpectingTerm)
+                Token::Word(_) => return Err(ParseError::AlreadyDefined),
+                _ => return Err(ParseError::ExpectingFreshName),
+            },
+            _ => return Err(ParseError::ExpectingTerm),
         }
         Ok(fb)
     }
 
-    fn parse_formula_onto(&mut self, fb: &mut FormulaBuilder, g: &Globals, ctx: &Context, tightness: Tightness) -> Result<Token, ParseError> {
+    fn parse_formula_onto(
+        &mut self,
+        fb: &mut FormulaBuilder,
+        g: &Globals,
+        ctx: &Context,
+        tightness: Tightness,
+    ) -> Result<Token, ParseError> {
         let (f, t) = self.parse_formula(g, ctx, tightness)?;
         fb.push_completed_builder(g, &f);
         Ok(t)
     }
 
-    fn parse_formula(&mut self, g: &Globals, ctx: &Context, tightness: Tightness) -> Result<(FormulaBuilder, Token), ParseError> {
+    fn parse_formula(
+        &mut self,
+        g: &Globals,
+        ctx: &Context,
+        tightness: Tightness,
+    ) -> Result<(FormulaBuilder, Token), ParseError> {
         let mut fb = self.parse_term(g, ctx)?;
         let mut t = self.token(ctx)?;
         loop {
             match binop(&t) {
-                Some((tt,sym,nextt)) => {
+                Some((tt, sym, nextt)) => {
                     if tt >= tightness {
                         let mut fb2 = FormulaBuilder::default();
                         mem::swap(&mut fb2, &mut fb);
@@ -273,15 +302,19 @@ impl<'a> Parser<'a> {
                         fb.push_completed_builder(g, &fb2 /* used to be called fb */);
                         t = self.parse_formula_onto(&mut fb, g, ctx, nextt)?;
                     } else {
-                        return Ok((fb,t));
+                        return Ok((fb, t));
                     }
                 }
-                None => return Ok((fb,t))
+                None => return Ok((fb, t)),
             }
         }
     }
 
-    fn parse_entire_formula(&mut self, g: &Globals, ctx: &Context) -> Result<FormulaBuilder, ParseError> {
+    fn parse_entire_formula(
+        &mut self,
+        g: &Globals,
+        ctx: &Context,
+    ) -> Result<FormulaBuilder, ParseError> {
         let mut fb = FormulaBuilder::default();
         let t = self.parse_formula_onto(&mut fb, g, ctx, Tightness::Formula)?;
         if t != Token::Eof {
