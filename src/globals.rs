@@ -1,4 +1,4 @@
-#[derive(Clone,Copy)]
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub struct GlobalSymbol {
     sym: u32,
 }
@@ -59,11 +59,15 @@ impl Default for Globals {
 
 impl Globals {
     pub fn global(&self, sym:u32) -> GlobalSymbol {
-        if (sym as usize) < self.globals.len() {
+        if sym < self.count() {
             GlobalSymbol{sym}
         } else {
             panic!("Global out of range");
         }
+    }
+
+    pub fn count(&self) -> u32 {
+        return self.globals.len() as u32;
     }
 
     pub fn get_arity(&self, sym: GlobalSymbol) -> u32 {

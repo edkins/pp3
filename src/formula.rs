@@ -71,7 +71,7 @@ pub struct FormulaPackage {
     num_free_vars: u32,
 }
 
-#[derive(Clone,Copy)]
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub struct FreeVar {
     var:u32,
 }
@@ -178,11 +178,31 @@ impl<'a> Formula<'a> {
 }
 
 impl FormulaBuilder {
+    pub fn to_string(&self, g: &Globals) -> String {
+        if self.terms_remaining != 0 {
+            panic!("Terms remaining");
+        }
+        let mut result = String::new();
+        slice_to_string(&mut result, &self.vec, g, 0);
+        result
+    }
+    
     pub fn push_formula(&mut self, _g: &Globals, f: Formula<'_>) {
         if self.terms_remaining == 0 {
             panic!("No terms remaining");
         }
         self.vec.extend_from_slice(f.slice);
+        self.terms_remaining -= 1;
+    }
+
+    pub fn push_completed_builder(&mut self, _g: &Globals, fb: &FormulaBuilder) {
+        if self.terms_remaining == 0 {
+            panic!("No terms remaining");
+        }
+        if fb.terms_remaining != 0 {
+            panic!("Still terms remaining on pushed formula builder");
+        }
+        self.vec.extend_from_slice(&fb.vec);
         self.terms_remaining -= 1;
     }
 
@@ -233,6 +253,17 @@ impl FormulaBuilder {
     }
 
     pub fn quantify_free_var(&mut self, _g: &Globals, f: Formula<'_>, var:FreeVar, existential:bool) {
+        self.quantify_from_slice(f.slice, var, existential)
+    }
+
+    pub fn quantify_completed_free_var(&mut self, _g: &Globals, f: &FormulaBuilder, var:FreeVar, existential:bool) {
+        if f.terms_remaining != 0 {
+            panic!("Still terms remaining");
+        }
+        self.quantify_from_slice(&f.vec, var, existential)
+    }
+
+    fn quantify_from_slice(&mut self, slice: &[u32], var:FreeVar, existential:bool) {
         if self.terms_remaining == 0 {
             panic!("No terms remaining");
         }
@@ -243,7 +274,7 @@ impl FormulaBuilder {
         } else {
             self.vec.push(FORALL);
         }
-        for item in f.slice {
+        for item in slice {
             if *item == exact {
                 self.vec.push(BOUNDVAR | depth);
             } else {
