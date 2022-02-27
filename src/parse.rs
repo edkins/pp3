@@ -399,11 +399,26 @@ impl<'a> Parser<'a> {
                 match binop(&t) {
                     Some((tt, sym, nextt)) => {
                         if tt >= tightness {
-                            let mut fb2 = FormulaBuilder::default();
-                            mem::swap(&mut fb2, &mut fb);
-                            fb.push_global(g, sym);
-                            fb.push_completed_builder(g, &fb2 /* used to be called fb */);
-                            t = self.parse_formula_onto(&mut fb, g, ctx, nextt)?;
+                            let pair = self.parse_formula_or_line(g, ctx, nextt, allow_line && (t == Token::Arrow))?;
+                            match pair.0 {
+                                ParseResult::Formula(f) => {
+                                    let mut fb2 = FormulaBuilder::default();
+                                    mem::swap(&mut fb2, &mut fb);
+                                    fb.push_global(g, sym);
+                                    fb.push_completed_builder(g, &fb2 /* used to be called fb */);
+                                    fb.push_completed_builder(g, &f);
+                                    t = pair.1.unwrap();
+                                }
+                                ParseResult::Box(lines) => {
+                                    if allow_line && t == Token::Arrow {
+                                        let result = ParseResult::Imp(fb.finish(g, ctx.num_free_vars), lines);
+                                        return Ok((result, pair.1));
+                                    } else {
+                                        return Err(ParseError::UnexpectedProofElement);
+                                    }
+                                }
+                                _ => return Err(ParseError::UnexpectedProofElement)
+                            }
                         } else {
                             return Ok((ParseResult::Formula(fb), Some(t)));
                         }
