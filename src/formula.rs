@@ -77,7 +77,7 @@ pub struct FreeVar {
 }
 
 impl FormulaPackage {
-    fn formula(&self) -> Formula<'_> {
+    pub fn formula(&self) -> Formula<'_> {
         Formula { slice: &self.vec }
     }
 }
@@ -93,6 +93,10 @@ impl FreeVar {
 
     fn item(&self) -> u32 {
         FREEVAR | self.var
+    }
+
+    pub fn to_string(&self) -> String {
+        freevar_name(self.var)
     }
 }
 

@@ -1,6 +1,7 @@
 mod formula;
 mod globals;
 mod parse;
+mod script;
 
 use clap::Parser;
 use std::fs;
@@ -14,6 +15,6 @@ fn main() {
     let args = Args::parse();
     let text = fs::read_to_string(args.input).expect("Could not read file");
 
-    let (g,f) = parse::parse(&text).expect("Could not parse file");
-    println!("{}", f.to_string(&g));
+    let (g,s) = parse::parse(&text).expect("Could not parse file");
+    s.print(&g, 0);
 }
