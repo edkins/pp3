@@ -1,7 +1,7 @@
 use crate::axioms;
-use crate::formula::{FreeVar, FormulaBuilder, FormulaPackage};
-use crate::globals::{Globals, self};
-use crate::script::{Line,Script};
+use crate::formula::{FormulaBuilder, FormulaPackage, FreeVar};
+use crate::globals::{self, Globals};
+use crate::script::{Line, Script};
 
 pub struct ProofContext {
     hypotheses: Vec<FormulaPackage>,
