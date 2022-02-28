@@ -67,6 +67,7 @@ pub struct Formula<'a> {
     slice: &'a [u32],
 }
 
+#[derive(Clone)]
 pub struct FormulaPackage {
     vec: Vec<u32>,
     num_free_vars: u32,
@@ -81,6 +82,10 @@ impl FormulaPackage {
     pub fn formula(&self) -> Formula<'_> {
         Formula { slice: &self.vec }
     }
+
+    pub fn num_free_vars(&self) -> u32 {
+        self.num_free_vars
+    }
 }
 
 impl FreeVar {
@@ -90,6 +95,10 @@ impl FreeVar {
         } else {
             panic!("Var out of range");
         }
+    }
+
+    pub fn index(&self) -> u32 {
+        self.var
     }
 
     fn item(&self) -> u32 {
@@ -190,6 +199,7 @@ impl<'a> Formula<'a> {
 }
 
 impl FormulaBuilder {
+    /*
     pub fn to_string(&self, g: &Globals) -> String {
         if self.terms_remaining != 0 {
             panic!("Terms remaining");
@@ -198,6 +208,7 @@ impl FormulaBuilder {
         slice_to_string(&mut result, &self.vec, g, 0);
         result
     }
+    */
 
     pub fn push_formula(&mut self, _g: &Globals, f: Formula<'_>) {
         if self.terms_remaining == 0 {

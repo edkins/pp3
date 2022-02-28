@@ -428,7 +428,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-    #[cfg(test)]
     fn parse_entire_formula(
         &mut self,
         g: &Globals,
@@ -484,7 +483,9 @@ impl<'a> Parser<'a> {
 
 #[derive(Debug)]
 pub struct ErrorWithContext {
+    #[allow(dead_code)]
     e: ParseError,
+    #[allow(dead_code)]
     context: String,
 }
 
@@ -499,6 +500,13 @@ pub fn parse(text: &str) -> Result<(Globals, Script), ErrorWithContext> {
             context: parser.context(),
         })?;
     Ok((g, script))
+}
+
+pub fn parse_sentence(g: &Globals, text: &str) -> Result<FormulaPackage, ParseError> {
+    let ctx = Context::new(g);
+    let mut parser = Parser::new(text);
+    let fb = parser.parse_entire_formula(g, &ctx)?;
+    Ok(fb.finish(g, 0))
 }
 
 #[cfg(test)]

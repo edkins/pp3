@@ -16,6 +16,10 @@ impl Script {
         Script { lines }
     }
 
+    pub fn lines(&self) -> &[Line] {
+        &self.lines
+    }
+
     pub fn print(&self, g: &Globals, depth: usize) {
         let mut spaces = String::new();
         for _ in 0..depth {
