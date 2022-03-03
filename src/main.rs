@@ -4,6 +4,7 @@ mod globals;
 mod parse;
 mod proof;
 mod script;
+mod tactics;
 
 use crate::proof::ProofContext;
 use clap::Parser;

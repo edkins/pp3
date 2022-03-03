@@ -83,6 +83,10 @@ impl FormulaPackage {
         Formula { slice: &self.vec }
     }
 
+    pub fn slice(&self) -> &[u32] {
+        &self.vec
+    }
+
     pub fn num_free_vars(&self) -> u32 {
         self.num_free_vars
     }
@@ -199,7 +203,7 @@ impl<'a> Formula<'a> {
 }
 
 impl FormulaBuilder {
-    /*
+    #[cfg(test)]
     pub fn to_string(&self, g: &Globals) -> String {
         if self.terms_remaining != 0 {
             panic!("Terms remaining");
@@ -208,7 +212,6 @@ impl FormulaBuilder {
         slice_to_string(&mut result, &self.vec, g, 0);
         result
     }
-    */
 
     pub fn push_formula(&mut self, _g: &Globals, f: Formula<'_>) {
         if self.terms_remaining == 0 {
@@ -359,6 +362,24 @@ impl FormulaBuilder {
             vec: self.vec,
             num_free_vars,
         }
+    }
+}
+
+pub fn first_term_len(g: &Globals, slice: &[u32]) -> usize {
+    let item = slice[0];
+    let d = item & DETAIL;
+    match item & KIND {
+        LITERAL | BOUNDVAR | FREEVAR => 1,
+        GLOBAL => {
+            let sym = g.global(d);
+            let mut result = 1;
+            for _ in 0..g.get_arity(sym) {
+                result += first_term_len(g, &slice[result..]);
+            }
+            result
+        }
+        FORALL | EXISTS => 1 + first_term_len(g, &slice[1..]),
+        _ => panic!("Unexpected kind"),
     }
 }
 
