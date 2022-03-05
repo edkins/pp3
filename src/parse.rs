@@ -87,14 +87,14 @@ impl ParseResult {
     }
 }
 
-fn binop(w: &Token) -> Option<(Tightness, GlobalSymbol, Tightness)> {
+fn binop(w: &Token) -> Option<(Tightness, GlobalSymbol, Tightness, bool)> {
     match w {
-        Token::Arrow => Some((Tightness::Formula, globals::IMP, Tightness::Formula)),
-        Token::Char('|') => Some((Tightness::Or, globals::OR, Tightness::And)),
-        Token::Char('&') => Some((Tightness::And, globals::AND, Tightness::Cmp)),
-        Token::Char('=') => Some((Tightness::Cmp, globals::EQ, Tightness::Add)),
-        Token::Char('+') => Some((Tightness::Add, globals::ADD, Tightness::Mul)),
-        Token::Char('*') => Some((Tightness::Mul, globals::MUL, Tightness::Term)),
+        Token::Arrow => Some((Tightness::Formula, globals::RIMP, Tightness::Formula, true)),
+        Token::Char('|') => Some((Tightness::Or, globals::OR, Tightness::And, false)),
+        Token::Char('&') => Some((Tightness::And, globals::AND, Tightness::Cmp, false)),
+        Token::Char('=') => Some((Tightness::Cmp, globals::EQ, Tightness::Add, false)),
+        Token::Char('+') => Some((Tightness::Add, globals::ADD, Tightness::Mul, false)),
+        Token::Char('*') => Some((Tightness::Mul, globals::MUL, Tightness::Term, false)),
         _ => None,
     }
 }
@@ -303,9 +303,9 @@ impl<'a> Parser<'a> {
                     match self.parse_term_or_line(g, &ctx2, allow_line)? {
                         ParseResult::Formula(fb3) => {
                             let mut fb4 = FormulaBuilder::default();
-                            fb4.push_global(g, globals::IMP);
-                            fb4.push_completed_builder(g, &fb2);
+                            fb4.push_global(g, globals::RIMP);
                             fb4.push_completed_builder(g, &fb3);
+                            fb4.push_completed_builder(g, &fb2);
                             fb.quantify_completed_free_var(g, &fb4, var, false);
                         }
                         ParseResult::Box(lines) => {
@@ -394,7 +394,7 @@ impl<'a> Parser<'a> {
             let mut t = self.token(ctx)?;
             loop {
                 match binop(&t) {
-                    Some((tt, sym, nextt)) => {
+                    Some((tt, sym, nextt, reverse)) => {
                         if tt >= tightness {
                             let pair = self.parse_formula_or_line(
                                 g,
@@ -407,10 +407,17 @@ impl<'a> Parser<'a> {
                                     let mut fb2 = FormulaBuilder::default();
                                     mem::swap(&mut fb2, &mut fb);
                                     fb.push_global(g, sym);
-                                    fb.push_completed_builder(
-                                        g, &fb2, /* used to be called fb */
-                                    );
-                                    fb.push_completed_builder(g, &f);
+                                    if reverse {
+                                        fb.push_completed_builder(g, &f);
+                                        fb.push_completed_builder(
+                                            g, &fb2, /* used to be called fb */
+                                        );
+                                    } else {
+                                        fb.push_completed_builder(
+                                            g, &fb2, /* used to be called fb */
+                                        );
+                                        fb.push_completed_builder(g, &f);
+                                    }
                                     t = pair.1.unwrap();
                                 }
                                 ParseResult::Box(lines) => {
@@ -610,7 +617,7 @@ mod test {
         let ctx = &Context::new(g);
         let mut p = Parser::new("forall x:nat (x=x)");
         let f = p.parse_entire_formula(g, ctx).unwrap();
-        assert_eq!(f.to_string(g), "@b0.imp(nat(b0),eq(b0,b0))");
+        assert_eq!(f.to_string(g), "@b0.rimp(eq(b0,b0),nat(b0))");
     }
 
     #[test]

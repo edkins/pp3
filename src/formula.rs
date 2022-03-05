@@ -8,8 +8,7 @@ use std::fmt;
  *
  * ```
  * match item & HEAD {
- *     PAIR => {},
- *     NUMBER => {},
+ *     LITERAL => {},
  *     GLOBAL => {},
  *     _ => {},
  * }
@@ -81,7 +80,7 @@ pub struct FreeVar {
 
 pub enum Outermost {
     Forall,
-    Imp,
+    Rimp,
     Other,
 }
 
@@ -128,8 +127,8 @@ impl<'a> Formula<'a> {
         let first = self.slice[0];
         if first == FORALL {
             Outermost::Forall
-        } else if first == GLOBAL + globals::IMP.sym() {
-            Outermost::Imp
+        } else if first == GLOBAL + globals::RIMP.sym() {
+            Outermost::Rimp
         } else {
             Outermost::Other
         }
@@ -549,8 +548,8 @@ impl<'a> FormulaReader<'a> {
         }
     }
 
-    pub fn expect_imp(&mut self, g: &Globals) -> Result<(), ReadError> {
-        self.expect_global(g, globals::IMP)
+    pub fn expect_rimp(&mut self, g: &Globals) -> Result<(), ReadError> {
+        self.expect_global(g, globals::RIMP)
     }
 
     pub fn expect_formula(&mut self, _g: &Globals, f: Formula<'_>) -> Result<(), ReadError> {
@@ -676,21 +675,21 @@ mod tests {
     }
 
     #[test]
-    fn push_imp() {
+    fn push_rimp() {
         let mut fb = FormulaBuilder::default();
         let g = &Globals::default();
-        fb.push_global(g, globals::IMP);
-        fb.push_global(g, globals::FALSE);
+        fb.push_global(g, globals::RIMP);
         fb.push_global(g, globals::TRUE);
+        fb.push_global(g, globals::FALSE);
         fb.finish(g, 0);
     }
 
     #[test]
     #[should_panic]
-    fn push_imp_unfinished() {
+    fn push_rimp_unfinished() {
         let mut fb = FormulaBuilder::default();
         let g = &Globals::default();
-        fb.push_global(g, globals::IMP);
+        fb.push_global(g, globals::RIMP);
         fb.push_global(g, globals::FALSE);
         fb.finish(g, 0);
     }
@@ -789,7 +788,7 @@ mod tests {
         println!("{}", pkg1.formula().to_string(g));
 
         let mut fb = FormulaBuilder::default();
-        fb.push_global(g, globals::IMP);
+        fb.push_global(g, globals::RIMP);
         fb.push_global(g, globals::EQ);
         fb.push_free_var(g, x);
         fb.push_free_var(g, x);
@@ -802,7 +801,7 @@ mod tests {
         let pkg = fb.finish(g, 0);
         assert_eq!(
             &pkg.formula().to_string(g),
-            "@b0.imp(eq(b0,b0),#b1.eq(b0,b1))"
+            "@b0.rimp(eq(b0,b0),#b1.eq(b0,b1))"
         );
     }
 }

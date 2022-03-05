@@ -100,9 +100,9 @@ impl ProofContext {
                     }
                 }
                 let mut fb = FormulaBuilder::default();
-                fb.push_global(g, globals::IMP);
-                fb.push_formula(g, h.formula());
+                fb.push_global(g, globals::RIMP);
                 fb.push_formula(g, conclusion.fact.formula());
+                fb.push_formula(g, h.formula());
                 let fact = fb.finish(g, self.num_free_vars);
                 self.facts.push(Fact {
                     num_boxes: self.boxes.len(),
@@ -155,9 +155,9 @@ impl ProofContext {
     pub fn imp_elim(&mut self, g: &Globals, i: usize, j: usize) {
         let mut reader = FormulaReader::new(self.facts[i].fact.formula());
         let hyp = self.facts[j].fact.formula();
-        reader.expect_imp(g).expect("Expecting imp");
-        reader.expect_formula(g, hyp).expect("Hyp mismatch");
+        reader.expect_rimp(g).expect("Expecting rimp");
         let conc = reader.read_formula(g);
+        reader.expect_formula(g, hyp).expect("Hyp mismatch");
         reader.end();
         let fact = conc.package(g, self.num_free_vars);
         self.facts.push(Fact {

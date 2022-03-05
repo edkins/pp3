@@ -136,17 +136,17 @@ fn gen_extra(g: &Globals, f: Formula<'_>, num_free_vars: u32) -> Vec<LayerDetail
             let rest = gen_extra(g, f2, num_free_vars + 1);
             result.extend(rest);
         }
-        Outermost::Imp => {
+        Outermost::Rimp => {
             let mut reader = FormulaReader::new(f);
-            reader.expect_imp(g).unwrap();
+            reader.expect_rimp(g).unwrap();
             let f1 = reader.read_formula(g);
             let f2 = reader.read_formula(g);
             reader.end();
             result.push(LayerDetail::Imp(
-                f1.package(g, num_free_vars),
                 f2.package(g, num_free_vars),
+                f1.package(g, num_free_vars),
             ));
-            let rest = gen_extra(g, f2, num_free_vars);
+            let rest = gen_extra(g, f1, num_free_vars);
             result.extend(rest);
         }
         Outermost::Other => {}

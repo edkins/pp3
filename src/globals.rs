@@ -19,7 +19,7 @@ impl GlobalSymbol {
 
 pub const FALSE: GlobalSymbol = GlobalSymbol::new(0);
 pub const TRUE: GlobalSymbol = GlobalSymbol::new(1);
-pub const IMP: GlobalSymbol = GlobalSymbol::new(2);
+pub const RIMP: GlobalSymbol = GlobalSymbol::new(2);
 pub const AND: GlobalSymbol = GlobalSymbol::new(3);
 pub const OR: GlobalSymbol = GlobalSymbol::new(4);
 pub const NOT: GlobalSymbol = GlobalSymbol::new(5);
@@ -56,9 +56,9 @@ impl Default for Globals {
             arity: 0,
             name: "true".to_owned(),
         };
-        globals[IMP.index()] = GlobalInfo {
+        globals[RIMP.index()] = GlobalInfo {
             arity: 2,
-            name: "imp".to_owned(),
+            name: "rimp".to_owned(),
         };
         globals[AND.index()] = GlobalInfo {
             arity: 2,
