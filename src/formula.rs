@@ -1,4 +1,4 @@
-use crate::globals::{GlobalSymbol, Globals};
+use crate::globals::{self, GlobalSymbol, Globals};
 use std::fmt;
 
 /**
@@ -78,6 +78,12 @@ pub struct FreeVar {
     var: u32,
 }
 
+pub enum Outermost {
+    Forall,
+    Imp,
+    Other,
+}
+
 impl FormulaPackage {
     pub fn formula(&self) -> Formula<'_> {
         Formula { slice: &self.vec }
@@ -89,6 +95,31 @@ impl FormulaPackage {
 
     pub fn num_free_vars(&self) -> u32 {
         self.num_free_vars
+    }
+}
+
+impl<'a> Formula<'a> {
+    pub fn package(self, _g: &Globals, num_free_vars: u32) -> FormulaPackage {
+        for item in self.slice {
+            if item & KIND == FREEVAR && item & DETAIL >= num_free_vars {
+                panic!("Free variable out of range");
+            }
+        }
+        FormulaPackage {
+            vec: self.slice.to_vec(),
+            num_free_vars,
+        }
+    }
+
+    pub fn outermost(&self) -> Outermost {
+        let first = self.slice[0];
+        if first == FORALL {
+            Outermost::Forall
+        } else if first == GLOBAL + globals::IMP.sym() {
+            Outermost::Imp
+        } else {
+            Outermost::Other
+        }
     }
 }
 
@@ -213,6 +244,13 @@ impl FormulaBuilder {
         result
     }
 
+    fn formula(&self) -> Formula<'_> {
+        if self.terms_remaining != 0 {
+            panic!("Terms remaining");
+        }
+        Formula { slice: &self.vec }
+    }
+
     pub fn push_formula(&mut self, _g: &Globals, f: Formula<'_>) {
         if self.terms_remaining == 0 {
             panic!("No terms remaining");
@@ -284,6 +322,52 @@ impl FormulaBuilder {
             }
         }
         self.terms_remaining -= 1;
+    }
+
+    pub fn subst_quantified_var_with_free_var(
+        &mut self,
+        g: &Globals,
+        f: Formula<'_>,
+        value: FreeVar,
+        existential: bool,
+    ) {
+        let mut fb = FormulaBuilder::default();
+        fb.push_free_var(g, value);
+        self.subst_quantified_var(g, f, fb.formula(), existential);
+    }
+
+    pub fn subst_quantified_var(
+        &mut self,
+        _g: &Globals,
+        f: Formula<'_>,
+        value: Formula<'_>,
+        existential: bool,
+    ) {
+        if f.slice[0] != (if existential { EXISTS } else { FORALL }) {
+            panic!("Does not start with expected quantifier");
+        }
+        let mut depth = 0;
+        for item in &f.slice[1..f.slice.len() - 1] {
+            let kind = item & KIND;
+            let detail = item & DETAIL;
+            if kind == BOUNDVAR && detail == depth {
+                self.vec.extend_from_slice(value.slice);
+            } else {
+                if kind == FORALL || kind == EXISTS {
+                    depth += 1;
+                    self.vec.push(*item);
+                } else if kind == SCOPEEND {
+                    if depth == 0 {
+                        panic!("Unexpected end of scope");
+                    }
+                    depth -= 1;
+                }
+                self.vec.push(*item);
+            }
+        }
+        if depth != 0 {
+            panic!("Unexpectedly still in a scope");
+        }
     }
 
     pub fn quantify_free_var(
@@ -380,6 +464,83 @@ pub fn first_term_len(g: &Globals, slice: &[u32]) -> usize {
         }
         FORALL | EXISTS => 1 + first_term_len(g, &slice[1..]),
         _ => panic!("Unexpected kind"),
+    }
+}
+
+pub struct FormulaReader<'a> {
+    remainder: &'a [u32],
+    terms_remaining: u32,
+}
+
+#[derive(Debug)]
+pub struct ReadError;
+
+impl<'a> FormulaReader<'a> {
+    pub fn new(f: Formula<'a>) -> Self {
+        FormulaReader {
+            remainder: f.slice,
+            terms_remaining: 1,
+        }
+    }
+
+    pub fn expect_global(&mut self, g: &Globals, sym: GlobalSymbol) -> Result<(), ReadError> {
+        if self.terms_remaining == 0 {
+            panic!("No terms remaining in reader");
+        }
+        if self.remainder[0] == GLOBAL + sym.sym() {
+            self.remainder = &self.remainder[1..];
+            self.terms_remaining += g.get_arity(sym) - 1;
+            Ok(())
+        } else {
+            Err(ReadError)
+        }
+    }
+
+    pub fn expect_imp(&mut self, g: &Globals) -> Result<(), ReadError> {
+        self.expect_global(g, globals::IMP)
+    }
+
+    pub fn expect_formula(&mut self, _g: &Globals, f: Formula<'_>) -> Result<(), ReadError> {
+        if self.terms_remaining == 0 {
+            panic!("No terms remaining in reader");
+        }
+        let expected_slice = f.slice;
+        let len = expected_slice.len();
+        if self.remainder.len() >= len && &self.remainder[..len] == expected_slice {
+            self.remainder = &self.remainder[len..];
+            self.terms_remaining -= 1;
+            Ok(())
+        } else {
+            Err(ReadError)
+        }
+    }
+
+    pub fn read_formula(&mut self, g: &Globals) -> Formula<'a> {
+        match self.terms_remaining {
+            0 => panic!("No terms remaining in reader"),
+            1 => {
+                self.terms_remaining -= 1;
+                let slice = self.remainder;
+                self.remainder = &[];
+                Formula { slice }
+            }
+            _ => {
+                let len = first_term_len(g, self.remainder);
+                let slice = &self.remainder[..len];
+                self.remainder = &self.remainder[len..];
+                self.terms_remaining -= 1;
+                Formula { slice }
+            }
+        }
+    }
+
+    pub fn end(self) {
+        if self.terms_remaining != 0 {
+            panic!("Still terms remaining in reader");
+        }
+        if !self.remainder.is_empty() {
+            panic!("Still data remaining in reader");
+        }
     }
 }
 

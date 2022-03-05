@@ -7,6 +7,7 @@ mod script;
 mod tactics;
 
 use crate::proof::ProofContext;
+use crate::tactics::TacticContext;
 use clap::Parser;
 use std::fs;
 
@@ -22,7 +23,6 @@ fn main() {
     let (mut g, s) = parse::parse(&text).expect("Could not parse file");
     s.print(&g, 0);
 
-    let mut proof_context = ProofContext::new(&g);
-    proof_context.process(&mut g, &s).expect("Proof failed");
-    proof_context.print(&g);
+    let mut tactic_context = TacticContext::new(&g, ProofContext::new(&g));
+    tactic_context.process(&mut g, &s).expect("Proof failed");
 }

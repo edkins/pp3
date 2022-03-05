@@ -1,7 +1,6 @@
 use crate::axioms;
-use crate::formula::{FormulaBuilder, FormulaPackage, FreeVar};
+use crate::formula::{Formula, FormulaBuilder, FormulaPackage, FormulaReader, FreeVar};
 use crate::globals::{self, Globals};
-use crate::script::{Line, Script};
 
 pub struct ProofContext {
     boxes: Vec<ProofBox>,
@@ -19,24 +18,30 @@ pub struct Fact {
     fact: FormulaPackage,
 }
 
-#[derive(Debug)]
-pub enum ProofError {
-    CouldNotProve(String),
-}
-
 impl ProofContext {
     pub fn new(g: &Globals) -> Self {
-        let facts = axioms::axioms(g).into_iter().map(|fact| {
-            if fact.num_free_vars() > 0 {
-                panic!("Not expecting free vars in axiom");
-            }
-            Fact{num_boxes:0, fact}
-        }).collect();
+        let facts = axioms::axioms(g)
+            .into_iter()
+            .map(|fact| {
+                if fact.num_free_vars() > 0 {
+                    panic!("Not expecting free vars in axiom");
+                }
+                Fact { num_boxes: 0, fact }
+            })
+            .collect();
         ProofContext {
             boxes: vec![],
             facts,
             num_free_vars: 0,
         }
+    }
+
+    pub fn num_formulas(&self) -> usize {
+        self.facts.len()
+    }
+
+    pub fn formula(&self, i: usize) -> Formula<'_> {
+        self.facts[i].fact.formula()
     }
 
     pub fn print(&self, g: &Globals) {
@@ -64,7 +69,10 @@ impl ProofContext {
             panic!("Too many free vars in hypothesis");
         }
         self.boxes.push(ProofBox::Imp(hyp.clone()));
-        self.facts.push(Fact{num_boxes: self.boxes.len(), fact: hyp.clone()});
+        self.facts.push(Fact {
+            num_boxes: self.boxes.len(),
+            fact: hyp.clone(),
+        });
     }
 
     pub fn begin_forall_box(&mut self, _g: &Globals, var: FreeVar) {
@@ -81,13 +89,9 @@ impl ProofContext {
                 if conclusion.num_boxes <= self.boxes.len() {
                     panic!("imp box is empty");
                 }
-                loop {
-                    if let Some(f) = self.facts.pop() {
-                        if f.num_boxes <= self.boxes.len() {
-                            self.facts.push(f);  // oops didn't mean to remove that one, put it back
-                            break;
-                        }
-                    } else {
+                while let Some(f) = self.facts.pop() {
+                    if f.num_boxes <= self.boxes.len() {
+                        self.facts.push(f); // oops didn't mean to remove that one, put it back
                         break;
                     }
                 }
@@ -96,7 +100,10 @@ impl ProofContext {
                 fb.push_formula(g, h.formula());
                 fb.push_formula(g, conclusion.fact.formula());
                 let fact = fb.finish(g, self.num_free_vars);
-                self.facts.push(Fact{num_boxes:self.boxes.len(), fact});
+                self.facts.push(Fact {
+                    num_boxes: self.boxes.len(),
+                    fact,
+                });
             } else {
                 panic!("imp box is empty");
             }
@@ -111,13 +118,9 @@ impl ProofContext {
                 if conclusion.num_boxes <= self.boxes.len() {
                     panic!("forall box is empty");
                 }
-                loop {
-                    if let Some(f) = self.facts.pop() {
-                        if f.num_boxes <= self.boxes.len() {
-                            self.facts.push(f);  // oops didn't mean to remove that one, put it back
-                            break;
-                        }
-                    } else {
+                while let Some(f) = self.facts.pop() {
+                    if f.num_boxes <= self.boxes.len() {
+                        self.facts.push(f); // oops didn't mean to remove that one, put it back
                         break;
                     }
                 }
@@ -125,12 +128,46 @@ impl ProofContext {
                 let mut fb = FormulaBuilder::default();
                 fb.quantify_free_var(g, conclusion.fact.formula(), x, false);
                 let fact = fb.finish(g, self.num_free_vars);
-                self.facts.push(Fact{num_boxes:self.boxes.len(), fact});
+                self.facts.push(Fact {
+                    num_boxes: self.boxes.len(),
+                    fact,
+                });
             } else {
                 panic!("forall box is empty");
             }
         } else {
             panic!("Not in a forall box");
         }
+    }
+
+    fn push_fb(&mut self, g: &Globals, fb: FormulaBuilder) {
+        let fact = fb.finish(g, self.num_free_vars);
+        self.facts.push(Fact {
+            num_boxes: self.boxes.len(),
+            fact,
+        });
+    }
+
+    pub fn imp_elim(&mut self, g: &Globals, i: usize, j: usize) {
+        let mut reader = FormulaReader::new(self.facts[i].fact.formula());
+        let hyp = self.facts[j].fact.formula();
+        reader.expect_imp(g).expect("Expecting imp");
+        reader.expect_formula(g, hyp).expect("Hyp mismatch");
+        let conc = reader.read_formula(g);
+        reader.end();
+        let fact = conc.package(g, self.num_free_vars);
+        self.facts.push(Fact {
+            num_boxes: self.boxes.len(),
+            fact,
+        });
+    }
+
+    pub fn forall_elim(&mut self, g: &Globals, i: usize, value: &FormulaPackage) {
+        if value.num_free_vars() > self.num_free_vars {
+            panic!("Too many free vars in value");
+        }
+        let mut fb = FormulaBuilder::default();
+        fb.subst_quantified_var(g, self.facts[i].fact.formula(), value.formula(), false);
+        self.push_fb(g, fb);
     }
 }
