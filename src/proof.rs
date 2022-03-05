@@ -154,9 +154,10 @@ impl ProofContext {
 
     pub fn imp_elim(&mut self, g: &Globals, i: usize, j: usize) {
         let mut reader = FormulaReader::new(self.facts[i].fact.formula());
+        let num_free_vars = self.facts[i].fact.num_free_vars();
         let hyp = self.facts[j].fact.formula();
         reader.expect_rimp(g).expect("Expecting rimp");
-        let conc = reader.read_formula(g);
+        let conc = reader.read_formula(g, num_free_vars);
         reader.expect_formula(g, hyp).expect("Hyp mismatch");
         reader.end();
         let fact = conc.package(g, self.num_free_vars);

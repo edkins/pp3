@@ -130,7 +130,7 @@ fn gen_extra(g: &Globals, f: Formula<'_>, num_free_vars: u32) -> Vec<LayerDetail
         Outermost::Forall => {
             let mut fb = FormulaBuilder::default();
             let var = FreeVar::new(num_free_vars);
-            fb.subst_quantified_var_with_free_var(g, f, var, false);
+            fb.subst_quantified_var_with_free_var(g, f, var, false, num_free_vars);
             result.push(LayerDetail::Forall(fb.finish(g, num_free_vars + 1)));
             let f2 = result[result.len() - 1].formula();
             let rest = gen_extra(g, f2, num_free_vars + 1);
@@ -139,8 +139,8 @@ fn gen_extra(g: &Globals, f: Formula<'_>, num_free_vars: u32) -> Vec<LayerDetail
         Outermost::Rimp => {
             let mut reader = FormulaReader::new(f);
             reader.expect_rimp(g).unwrap();
-            let f1 = reader.read_formula(g);
-            let f2 = reader.read_formula(g);
+            let f1 = reader.read_formula(g, num_free_vars);
+            let f2 = reader.read_formula(g, num_free_vars);
             reader.end();
             result.push(LayerDetail::Imp(
                 f2.package(g, num_free_vars),

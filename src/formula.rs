@@ -177,6 +177,7 @@ pub struct FormulaBuilder {
 #[derive(Clone, Copy)]
 pub struct Formula<'a> {
     slice: &'a [u32],
+    num_free_vars: u32,
 }
 
 #[derive(Clone)]
@@ -200,7 +201,7 @@ const ZERO:Sym = Sym::literal(0);
 
 impl FormulaPackage {
     pub fn formula(&self) -> Formula<'_> {
-        Formula { slice: &self.vec }
+        Formula { slice: &self.vec, num_free_vars: self.num_free_vars }
     }
 
     pub fn num_free_vars(&self) -> u32 {
@@ -230,6 +231,7 @@ impl<'a> Formula<'a> {
     pub fn dummy() -> Self {
         Formula {
             slice: &[ZERO.0],
+            num_free_vars: 0,
         }
     }
 
@@ -294,6 +296,7 @@ impl<'a> Formula<'a> {
                     let split_len = first_term_len(g, &self.slice[i..]);
                     result[index] = Some(Formula {
                         slice: &self.slice[i..i + split_len],
+                        num_free_vars: common_free_vars + result_vars,
                     });
                     i += split_len;
                 }
@@ -402,11 +405,11 @@ impl FormulaBuilder {
         result
     }
 
-    fn formula(&self) -> Formula<'_> {
+    fn formula(&self, num_free_vars: u32) -> Formula<'_> {
         if self.terms_remaining != 0 {
             panic!("Terms remaining");
         }
-        Formula { slice: &self.vec }
+        Formula { slice: &self.vec, num_free_vars }
     }
 
     pub fn push_formula(&mut self, _g: &Globals, f: Formula<'_>) {
@@ -482,10 +485,11 @@ impl FormulaBuilder {
         f: Formula<'_>,
         value: FreeVar,
         existential: bool,
+        num_free_vars: u32,
     ) {
         let mut fb = FormulaBuilder::default();
         fb.push_free_var(g, value);
-        self.subst_quantified_var(g, f, fb.formula(), existential);
+        self.subst_quantified_var(g, f, fb.formula(num_free_vars), existential);
     }
 
     pub fn subst_quantified_var(
@@ -669,21 +673,21 @@ impl<'a> FormulaReader<'a> {
         }
     }
 
-    pub fn read_formula(&mut self, g: &Globals) -> Formula<'a> {
+    pub fn read_formula(&mut self, g: &Globals, num_free_vars: u32) -> Formula<'a> {
         match self.terms_remaining {
             0 => panic!("No terms remaining in reader"),
             1 => {
                 self.terms_remaining -= 1;
                 let slice = self.remainder;
                 self.remainder = &[];
-                Formula { slice }
+                Formula { slice, num_free_vars }
             }
             _ => {
                 let len = first_term_len(g, self.remainder);
                 let slice = &self.remainder[..len];
                 self.remainder = &self.remainder[len..];
                 self.terms_remaining -= 1;
-                Formula { slice }
+                Formula { slice, num_free_vars }
             }
         }
     }
