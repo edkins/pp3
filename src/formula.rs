@@ -1,61 +1,173 @@
 use crate::globals::{self, GlobalSymbol, Globals};
 use std::fmt;
 
-/**
- * The top 8 bits of an item define its kind.
- *
- * e.g.
- *
- * ```
- * match item & HEAD {
- *     LITERAL => {},
- *     GLOBAL => {},
- *     _ => {},
- * }
- * ```
- */
-const KIND: u32 = 0xff00_0000;
+mod sym {
+    use super::*;
+    /**
+     * The top 8 bits of an item define its kind.
+     *
+     * e.g.
+     *
+     * ```
+     * match item & HEAD {
+     *     LITERAL => {},
+     *     GLOBAL => {},
+     *     _ => {},
+     * }
+     * ```
+     */
+    const KIND: u32 = 0xff00_0000;
 
-/**
- * The bottom 24 bits of an item define further details, the meaning of which
- * are dependent on the kind.
- */
-const DETAIL: u32 = 0x00ff_ffff;
+    /**
+     * The bottom 24 bits of an item define further details, the meaning of which
+     * are dependent on the kind.
+     */
+    const DETAIL: u32 = 0x00ff_ffff;
 
-/**
- * An unsigned integer, at most 0x00ffffff
- */
-const LITERAL: u32 = 0x0100_0000;
+    pub const MAX_VARNUM: u32 = DETAIL;
 
-/**
- * A bound variable. The detail defines which it is (where 0 is the innermost variable).
- */
-const BOUNDVAR: u32 = 0x0300_0000;
+    /**
+     * An unsigned integer, at most 0x00ffffff
+     */
+    const LITERAL: u32 = 0x0100_0000;
 
-/**
- * A free variable.
- */
-const FREEVAR: u32 = 0x0400_0000;
+    /**
+     * A bound variable. The detail defines which it is (where 0 is the innermost variable).
+     */
+    const BOUNDVAR: u32 = 0x0300_0000;
 
-/**
- * A global symbol.
- */
-const GLOBAL: u32 = 0x0500_0000;
+    /**
+     * A free variable.
+     */
+    const FREEVAR: u32 = 0x0400_0000;
 
-/**
- * A "forall" block. The detail is always 0.
- */
-const FORALL: u32 = 0x0600_0000;
+    /**
+     * A global symbol.
+     */
+    const GLOBAL: u32 = 0x0500_0000;
 
-/**
- * An "exists" block. The detail is always 0.
- */
-const EXISTS: u32 = 0x0700_0000;
+    /**
+     * A "forall" block. The detail is always 0.
+     */
+    const FORALL: u32 = 0x0600_0000;
 
-/**
- * The end of a "forall" or "exists" block. The detail is always 0.
- */
-const SCOPEEND: u32 = 0x0800_0000;
+    /**
+     * An "exists" block. The detail is always 0.
+     */
+    const EXISTS: u32 = 0x0700_0000;
+
+    /**
+     * The end of a "forall" or "exists" block. The detail is always 0.
+     */
+    const SCOPEEND: u32 = 0x0800_0000;
+
+    #[derive(Clone, Copy, Eq, PartialEq)]
+    pub struct Sym(pub u32);
+
+    impl Sym {
+        pub const fn literal(n: u32) -> Sym {
+            if n > MAX_VARNUM {
+                panic!("n too big");
+            }
+            Sym(LITERAL + n)
+        }
+
+        pub fn free_var(var: FreeVar) -> Sym {
+            if var.index() > MAX_VARNUM {
+                panic!("Free var too big");
+            }
+            Sym(FREEVAR + var.index())
+        }
+
+        pub fn bound_var(n: u32) -> Sym {
+            if n > MAX_VARNUM {
+                panic!("Bound var too big");
+            }
+            Sym(BOUNDVAR + n)
+        }
+
+        pub fn global(gs: GlobalSymbol) -> Sym {
+            if gs.sym() > MAX_VARNUM {
+                panic!("global symbol too big");
+            }
+            Sym(GLOBAL + gs.sym())
+        }
+
+        pub fn forall() -> Sym {
+            Sym(FORALL)
+        }
+
+        pub fn exists() -> Sym {
+            Sym(EXISTS)
+        }
+
+        pub fn scope_end() -> Sym {
+            Sym(SCOPEEND)
+        }
+
+        fn kind(self) -> u32 {
+            self.0 & KIND
+        }
+
+        fn detail(self) -> u32 {
+            self.0 & DETAIL
+        }
+
+        pub fn arity(self, g: &Globals) -> u32 {
+            match self.kind() {
+                LITERAL | BOUNDVAR | FREEVAR => 0,
+                GLOBAL => g.get_arity(g.global(self.detail())),
+                _ => panic!("Cannot get arity of this symbol")
+            }
+        }
+
+        pub fn get_literal_value(self) -> Option<u32> {
+            if self.kind() == LITERAL {
+                Some(self.detail())
+            } else {
+                None
+            }
+        }
+
+        pub fn get_free_var_num(self) -> Option<u32> {
+            if self.kind() == FREEVAR {
+                Some(self.detail())
+            } else {
+                None
+            }
+        }
+
+        pub fn get_bound_var_num(self) -> Option<u32> {
+            if self.kind() == BOUNDVAR {
+                Some(self.detail())
+            } else {
+                None
+            }
+        }
+
+        pub fn get_global_num(self) -> Option<u32> {
+            if self.kind() == GLOBAL {
+                Some(self.detail())
+            } else {
+                None
+            }
+        }
+
+        pub fn is_forall(self) -> bool {
+            self.kind() == FORALL
+        }
+
+        pub fn is_quantifier(self) -> bool {
+            self.kind() == FORALL || self.kind() == EXISTS
+        }
+
+        pub fn is_rimp(self) -> bool {
+            self.0 == GLOBAL + globals::RIMP.sym()
+        }
+    }
+}
+
+use sym::Sym;
 
 pub struct FormulaBuilder {
     vec: Vec<u32>,
@@ -84,13 +196,11 @@ pub enum Outermost {
     Other,
 }
 
+const ZERO:Sym = Sym::literal(0);
+
 impl FormulaPackage {
     pub fn formula(&self) -> Formula<'_> {
         Formula { slice: &self.vec }
-    }
-
-    pub fn slice(&self) -> &[u32] {
-        &self.vec
     }
 
     pub fn num_free_vars(&self) -> u32 {
@@ -99,6 +209,18 @@ impl FormulaPackage {
 }
 
 impl<'a> Formula<'a> {
+    pub fn iter(self) -> impl Iterator<Item=Sym> + 'a {
+        self.slice.iter().map(|n|Sym(*n))
+    }
+
+    pub fn len(self) -> usize {
+        self.slice.len()
+    }
+
+    pub fn get(self, i: usize) -> Sym {
+        Sym(self.slice[i])
+    }
+
     pub fn to_string(self, g: &Globals) -> String {
         let mut result = String::new();
         slice_to_string(&mut result, self.slice, g, 0);
@@ -107,14 +229,16 @@ impl<'a> Formula<'a> {
 
     pub fn dummy() -> Self {
         Formula {
-            slice: &[LITERAL], // represents zero
+            slice: &[ZERO.0],
         }
     }
 
     pub fn package(self, _g: &Globals, num_free_vars: u32) -> FormulaPackage {
-        for item in self.slice {
-            if item & KIND == FREEVAR && item & DETAIL >= num_free_vars {
-                panic!("Free variable out of range");
+        for item in self.iter() {
+            if let Some(varnum) = item.get_free_var_num() {
+                if varnum >= num_free_vars {
+                    panic!("Free variable out of range");
+                }
             }
         }
         FormulaPackage {
@@ -124,10 +248,10 @@ impl<'a> Formula<'a> {
     }
 
     pub fn outermost(self) -> Outermost {
-        let first = self.slice[0];
-        if first == FORALL {
+        let first = self.get(0);
+        if first.is_forall() {
             Outermost::Forall
-        } else if first == GLOBAL + globals::RIMP.sym() {
+        } else if first.is_rimp() {
             Outermost::Rimp
         } else {
             Outermost::Other
@@ -153,11 +277,12 @@ impl<'a> Formula<'a> {
         let mut i = 0;
         let mut j = 0;
         let mut result: Vec<Option<Formula>> = vec![None; result_vars as usize];
-        while i < self.slice.len() {
-            let item = other.slice[j];
+        while i < self.len() {
+            let item = other.get(j);
             j += 1;
-            if item & KIND == FREEVAR && item & DETAIL >= common_free_vars {
-                let index = ((item & DETAIL) - common_free_vars) as usize;
+            let fv = item.get_free_var_num();
+            if fv.is_some() && fv.unwrap() >= common_free_vars {
+                let index = (fv.unwrap() - common_free_vars) as usize;
                 if let Some(f) = result[index] {
                     // Variable was seen before, so check we encounter the same thing
                     if !self.slice[i..].starts_with(f.slice) {
@@ -173,7 +298,7 @@ impl<'a> Formula<'a> {
                     i += split_len;
                 }
             } else {
-                if self.slice[i] != item {
+                if self.get(i) != item {
                     return None;
                 }
                 i += 1;
@@ -185,19 +310,15 @@ impl<'a> Formula<'a> {
 
 impl FreeVar {
     pub fn new(var: u32) -> Self {
-        if var <= DETAIL {
+        if var <= sym::MAX_VARNUM {
             FreeVar { var }
         } else {
             panic!("Var out of range");
         }
     }
 
-    pub fn index(&self) -> u32 {
+    pub fn index(self) -> u32 {
         self.var
-    }
-
-    fn item(&self) -> u32 {
-        FREEVAR | self.var
     }
 }
 
@@ -231,57 +352,42 @@ fn slice_to_string<'a>(
     depth: u32,
 ) -> &'a [u32] {
     let item = slice[0];
-    let d = item & DETAIL;
+    let sym = Sym(item);
     slice = &slice[1..];
-    match item & KIND {
-        LITERAL => {
-            result.push_str(&format!("{}", d));
-            slice
-        }
-        BOUNDVAR => {
-            result.push_str(&boundvar_name(
-                depth.checked_sub(1 + d).expect("Bound var out of range"),
-            ));
-            slice
-        }
-        FREEVAR => {
-            result.push_str(&freevar_name(d));
-            slice
-        }
-        GLOBAL => {
-            let sym = g.global(d);
-            result.push_str(g.get_name(sym));
-            result.push('(');
-            for i in 0..g.get_arity(sym) {
-                if i > 0 {
-                    result.push(',');
-                }
-                slice = slice_to_string(result, slice, g, depth);
+    if let Some(n) = sym.get_literal_value() {
+        result.push_str(&format!("{}", n));
+        slice
+    } else if let Some(v) = sym.get_bound_var_num() {
+        result.push_str(&boundvar_name(
+            depth.checked_sub(1 + v).expect("Bound var out of range"),
+        ));
+        slice
+    } else if let Some(v) = sym.get_free_var_num() {
+        result.push_str(&freevar_name(v));
+        slice
+    } else if let Some(gnum) = sym.get_global_num() {
+        let gsym = g.global(gnum);
+        result.push_str(g.get_name(gsym));
+        result.push('(');
+        for i in 0..sym.arity(g) {
+            if i > 0 {
+                result.push(',');
             }
-            result.push(')');
-            slice
+            slice = slice_to_string(result, slice, g, depth);
         }
-        FORALL => {
-            result.push('@');
-            result.push_str(&boundvar_name(depth));
-            result.push('.');
-            slice = slice_to_string(result, slice, g, depth + 1);
-            if slice[0] != SCOPEEND {
-                panic!("Expecting scope end at this point");
-            }
-            &slice[1..]
+        result.push(')');
+        slice
+    } else if sym.is_quantifier() {
+        result.push(if sym.is_forall() {'@'} else {'#'});
+        result.push_str(&boundvar_name(depth));
+        result.push('.');
+        slice = slice_to_string(result, slice, g, depth + 1);
+        if Sym(slice[0]) != Sym::scope_end() {
+            panic!("Expecting scope end at this point");
         }
-        EXISTS => {
-            result.push('#');
-            result.push_str(&boundvar_name(depth));
-            result.push('.');
-            slice = slice_to_string(result, slice, g, depth + 1);
-            if slice[0] != SCOPEEND {
-                panic!("Expecting scope end at this point");
-            }
-            &slice[1..]
-        }
-        _ => panic!("Unexpected kind"),
+        &slice[1..]
+    } else {
+        panic!("Unexpected kind");
     }
 }
 
@@ -326,13 +432,10 @@ impl FormulaBuilder {
         if self.terms_remaining == 0 {
             panic!("No terms remaining");
         }
-        let sym = gsym.sym();
-        if sym > DETAIL {
-            panic!("Global sym out of range");
-        }
-        self.vec.push(GLOBAL | sym);
+        let sym = Sym::global(gsym);
+        self.vec.push(sym.0);
         self.terms_remaining = (self.terms_remaining - 1)
-            .checked_add(g.get_arity(gsym))
+            .checked_add(sym.arity(g))
             .expect("Too many terms remaining");
     }
 
@@ -340,10 +443,7 @@ impl FormulaBuilder {
         if self.terms_remaining == 0 {
             panic!("No terms remaining");
         }
-        if n > DETAIL {
-            panic!("Literal value out of range");
-        }
-        self.vec.push(LITERAL | n);
+        self.vec.push(Sym::literal(n).0);
         self.terms_remaining -= 1;
     }
 
@@ -351,7 +451,7 @@ impl FormulaBuilder {
         if self.terms_remaining == 0 {
             panic!("No terms remaining");
         }
-        self.vec.push(var.item());
+        self.vec.push(Sym::free_var(var).0);
         self.terms_remaining -= 1;
     }
 
@@ -365,12 +465,12 @@ impl FormulaBuilder {
         if self.terms_remaining == 0 {
             panic!("No terms remaining");
         }
-        let exact = var.item();
-        for item in f.slice {
-            if *item == exact {
+        let exact = Sym::free_var(var);
+        for item in f.iter() {
+            if item == exact {
                 self.vec.extend_from_slice(value.slice);
             } else {
-                self.vec.push(*item);
+                self.vec.push(item.0);
             }
         }
         self.terms_remaining -= 1;
@@ -395,26 +495,25 @@ impl FormulaBuilder {
         value: Formula<'_>,
         existential: bool,
     ) {
-        if f.slice[0] != (if existential { EXISTS } else { FORALL }) {
+        if Sym(f.slice[0]) != (if existential { Sym::exists() } else { Sym::forall() }) {
             panic!("Does not start with expected quantifier");
         }
         let mut depth = 0;
         for item in &f.slice[1..f.slice.len() - 1] {
-            let kind = item & KIND;
-            let detail = item & DETAIL;
-            if kind == BOUNDVAR && detail == depth {
+            let sym = Sym(*item);
+            if sym == Sym::bound_var(depth) {
                 self.vec.extend_from_slice(value.slice);
             } else {
-                if kind == FORALL || kind == EXISTS {
+                if sym.is_quantifier() {
                     depth += 1;
                     self.vec.push(*item);
-                } else if kind == SCOPEEND {
+                } else if sym == Sym::scope_end() {
                     if depth == 0 {
                         panic!("Unexpected end of scope");
                     }
                     depth -= 1;
                 }
-                self.vec.push(*item);
+                self.vec.push(sym.0);
             }
         }
         if depth != 0 {
@@ -449,49 +548,52 @@ impl FormulaBuilder {
         if self.terms_remaining == 0 {
             panic!("No terms remaining");
         }
-        let exact = var.item();
+        let exact = Sym::free_var(var);
         let mut depth = 0;
         if existential {
-            self.vec.push(EXISTS);
+            self.vec.push(Sym::exists().0);
         } else {
-            self.vec.push(FORALL);
+            self.vec.push(Sym::forall().0);
         }
         for item in slice {
-            if *item == exact {
-                self.vec.push(BOUNDVAR | depth);
+            let sym = Sym(*item);
+            if sym == exact {
+                self.vec.push(Sym::bound_var(depth).0);
             } else {
-                match item & KIND {
-                    FORALL | EXISTS => {
-                        depth += 1;
-                        if depth > DETAIL {
-                            panic!("Too deep");
-                        }
+                if sym.is_quantifier() {
+                    depth += 1;
+                    if depth > sym::MAX_VARNUM {
+                        panic!("Too deep");
                     }
-                    SCOPEEND => {
-                        if depth == 0 {
-                            panic!("Mismatched scope end");
-                        }
-                        depth -= 1;
+                } else if sym == Sym::scope_end() {
+                    if depth == 0 {
+                        panic!("Mismatched scope end");
                     }
-                    _ => {}
+                    depth -= 1;
                 }
-                self.vec.push(*item);
+                self.vec.push(sym.0);
             }
         }
         if depth != 0 {
             panic!("Missing scope end");
         }
-        self.vec.push(SCOPEEND);
+        self.vec.push(Sym::scope_end().0);
         self.terms_remaining -= 1;
+    }
+
+    fn iter(&self) -> impl Iterator<Item=Sym> + '_ {
+        self.vec.iter().map(|n|Sym(*n))
     }
 
     pub fn finish(self, _g: &Globals, num_free_vars: u32) -> FormulaPackage {
         if self.terms_remaining != 0 {
             panic!("Still remaining terms");
         }
-        for item in &self.vec {
-            if item & KIND == FREEVAR && item & DETAIL >= num_free_vars {
-                panic!("Free variable out of range");
+        for item in self.iter() {
+            if let Some(varnum) = item.get_free_var_num() {
+                if varnum >= num_free_vars {
+                    panic!("Free variable out of range");
+                }
             }
         }
         FormulaPackage {
@@ -502,20 +604,15 @@ impl FormulaBuilder {
 }
 
 pub fn first_term_len(g: &Globals, slice: &[u32]) -> usize {
-    let item = slice[0];
-    let d = item & DETAIL;
-    match item & KIND {
-        LITERAL | BOUNDVAR | FREEVAR => 1,
-        GLOBAL => {
-            let sym = g.global(d);
-            let mut result = 1;
-            for _ in 0..g.get_arity(sym) {
-                result += first_term_len(g, &slice[result..]);
-            }
-            result
+    let item = Sym(slice[0]);
+    if item.is_quantifier() {
+        1 + first_term_len(g, &slice[1..])
+    } else {
+        let mut result = 1;
+        for _ in 0..item.arity(g) {
+            result += first_term_len(g, &slice[result..]);
         }
-        FORALL | EXISTS => 1 + first_term_len(g, &slice[1..]),
-        _ => panic!("Unexpected kind"),
+        result
     }
 }
 
@@ -535,13 +632,18 @@ impl<'a> FormulaReader<'a> {
         }
     }
 
+    fn get(&self, i: usize) -> Sym {
+        Sym(self.remainder[i])
+    }
+
     pub fn expect_global(&mut self, g: &Globals, sym: GlobalSymbol) -> Result<(), ReadError> {
         if self.terms_remaining == 0 {
             panic!("No terms remaining in reader");
         }
-        if self.remainder[0] == GLOBAL + sym.sym() {
+        let gsym = Sym::global(sym);
+        if self.get(0) == gsym {
             self.remainder = &self.remainder[1..];
-            self.terms_remaining += g.get_arity(sym) - 1;
+            self.terms_remaining += gsym.arity(g) - 1;
             Ok(())
         } else {
             Err(ReadError)
