@@ -32,7 +32,7 @@ impl LayerDetail {
     fn hypothesis(&self) -> Formula<'_> {
         match self {
             LayerDetail::Forall(_) => panic!("Not an imp"),
-            LayerDetail::Imp(h, f) => h.formula(),
+            LayerDetail::Imp(h, _) => h.formula(),
         }
     }
 

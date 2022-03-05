@@ -100,6 +100,12 @@ impl FormulaPackage {
 }
 
 impl<'a> Formula<'a> {
+    pub fn to_string(self, g: &Globals) -> String {
+        let mut result = String::new();
+        slice_to_string(&mut result, self.slice, g, 0);
+        result
+    }
+
     pub fn dummy() -> Self {
         Formula {
             slice: &[LITERAL], // represents zero
@@ -277,14 +283,6 @@ fn slice_to_string<'a>(
             &slice[1..]
         }
         _ => panic!("Unexpected kind"),
-    }
-}
-
-impl<'a> Formula<'a> {
-    pub fn to_string(&self, g: &Globals) -> String {
-        let mut result = String::new();
-        slice_to_string(&mut result, self.slice, g, 0);
-        result
     }
 }
 
