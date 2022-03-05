@@ -44,6 +44,10 @@ impl ProofContext {
         self.facts[i].fact.formula()
     }
 
+    pub fn formula_free_vars(&self, i: usize) -> u32 {
+        self.facts[i].fact.num_free_vars()
+    }
+
     pub fn print(&self, g: &Globals) {
         let mut num_boxes_printed = 0;
         println!("<<<<");

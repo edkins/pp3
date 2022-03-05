@@ -63,6 +63,7 @@ pub struct FormulaBuilder {
     terms_remaining: u32,
 }
 
+#[derive(Clone, Copy)]
 pub struct Formula<'a> {
     slice: &'a [u32],
 }
@@ -99,6 +100,12 @@ impl FormulaPackage {
 }
 
 impl<'a> Formula<'a> {
+    pub fn dummy() -> Self {
+        Formula {
+            slice: &[LITERAL], // represents zero
+        }
+    }
+
     pub fn package(self, _g: &Globals, num_free_vars: u32) -> FormulaPackage {
         for item in self.slice {
             if item & KIND == FREEVAR && item & DETAIL >= num_free_vars {
@@ -111,7 +118,7 @@ impl<'a> Formula<'a> {
         }
     }
 
-    pub fn outermost(&self) -> Outermost {
+    pub fn outermost(self) -> Outermost {
         let first = self.slice[0];
         if first == FORALL {
             Outermost::Forall
@@ -120,6 +127,54 @@ impl<'a> Formula<'a> {
         } else {
             Outermost::Other
         }
+    }
+
+    /**
+     * Check if self is a specialization of other.
+     *
+     * If so, return a vector of how each free variable is specialized. If not, return None.
+     * Some of the variables might be missing, and that's ok, but then we don't know how to
+     * specialize them so return None in the corresponding entry.
+     *
+     * Furthermore, the caller can insist that both formulas have some free variables in common.
+     */
+    pub fn is_specialization_of(
+        self,
+        g: &Globals,
+        other: Formula<'_>,
+        common_free_vars: u32,
+        result_vars: u32,
+    ) -> Option<Vec<Option<Formula<'a>>>> {
+        let mut i = 0;
+        let mut j = 0;
+        let mut result: Vec<Option<Formula>> = vec![None; result_vars as usize];
+        while i < self.slice.len() {
+            let item = other.slice[j];
+            j += 1;
+            if item & KIND == FREEVAR && item & DETAIL >= common_free_vars {
+                let index = ((item & DETAIL) - common_free_vars) as usize;
+                if let Some(f) = result[index] {
+                    // Variable was seen before, so check we encounter the same thing
+                    if !self.slice[i..].starts_with(f.slice) {
+                        return None;
+                    }
+                    i += f.slice.len();
+                } else {
+                    // Variable wasn't seen before, so store what we find
+                    let split_len = first_term_len(g, &self.slice[i..]);
+                    result[index] = Some(Formula {
+                        slice: &self.slice[i..i + split_len],
+                    });
+                    i += split_len;
+                }
+            } else {
+                if self.slice[i] != item {
+                    return None;
+                }
+                i += 1;
+            }
+        }
+        Some(result)
     }
 }
 

@@ -12,23 +12,126 @@ pub struct TacticContext {
 }
 
 enum Extra {
-    Layers(Vec<FormulaPackage>),
+    Layers(Vec<LayerDetail>),
     Ignore,
 }
 
-struct AugmentedFormula<'a> {
-    formula: Formula<'a>,
-    extra: &'a Extra,
+enum LayerDetail {
+    Forall(FormulaPackage),
+    Imp(FormulaPackage, FormulaPackage),
 }
 
-fn gen_extra(g: &Globals, f: Formula<'_>, num_free_vars: u32) -> Vec<FormulaPackage> {
+impl LayerDetail {
+    fn formula(&self) -> Formula<'_> {
+        match self {
+            LayerDetail::Forall(f) => f.formula(),
+            LayerDetail::Imp(_, f) => f.formula(),
+        }
+    }
+
+    fn hypothesis(&self) -> Formula<'_> {
+        match self {
+            LayerDetail::Forall(_) => panic!("Not an imp"),
+            LayerDetail::Imp(h, f) => h.formula(),
+        }
+    }
+
+    fn num_free_vars(&self) -> u32 {
+        match self {
+            LayerDetail::Forall(f) => f.num_free_vars(),
+            LayerDetail::Imp(_, f) => f.num_free_vars(),
+        }
+    }
+
+    fn is_imp(&self) -> bool {
+        matches!(self, LayerDetail::Imp(_, _))
+    }
+}
+
+#[derive(Clone, Copy)]
+struct AugmentedFormula<'a> {
+    formula: Formula<'a>,
+    num_free_vars: u32,
+    layers: &'a [LayerDetail],
+}
+
+struct SpecializationResult {
+    hypotheses: Vec<FormulaPackage>,
+    specializations: Vec<FormulaPackage>,
+}
+
+impl<'a> AugmentedFormula<'a> {
+    fn layer(self, i: usize) -> Formula<'a> {
+        if i == 0 {
+            self.formula
+        } else {
+            self.layers[i - 1].formula()
+        }
+    }
+
+    fn layer_free_vars(self, i: usize) -> u32 {
+        if i == 0 {
+            self.num_free_vars
+        } else {
+            self.layers[i - 1].num_free_vars()
+        }
+    }
+
+    fn num_layers(self) -> usize {
+        self.layers.len() + 1
+    }
+
+    /**
+     * Return whether self can be derived from other by specializing variables and proving
+     * hypothesis. Basically whether you can get there by unpeeling the "forall" and "imp" layers.
+     */
+    fn is_specialization_of(
+        self,
+        g: &Globals,
+        other: AugmentedFormula<'_>,
+    ) -> Option<SpecializationResult> {
+        if self.num_layers() > other.num_layers() {
+            return None;
+        }
+        let i = other.num_layers() - self.num_layers();
+        let layer = other.layer(i);
+        if let Some(specs) = self.formula.is_specialization_of(
+            g,
+            layer,
+            other.num_free_vars,
+            other.layer_free_vars(i) - other.num_free_vars,
+        ) {
+            let specializations = specs
+                .iter()
+                .map(|spec| {
+                    spec.unwrap_or_else(Formula::dummy)
+                        .package(g, other.num_free_vars)
+                })
+                .collect();
+            let hypotheses = other
+                .layers
+                .iter()
+                .filter(|ld| ld.is_imp())
+                .map(|ld| ld.hypothesis().package(g, other.num_free_vars))
+                .collect();
+            Some(SpecializationResult {
+                hypotheses,
+                specializations,
+            })
+        } else {
+            None
+        }
+    }
+}
+
+fn gen_extra(g: &Globals, f: Formula<'_>, num_free_vars: u32) -> Vec<LayerDetail> {
     let mut result = vec![];
     match f.outermost() {
         Outermost::Forall => {
             let mut fb = FormulaBuilder::default();
             let var = FreeVar::new(num_free_vars);
             fb.subst_quantified_var_with_free_var(g, f, var, false);
-            result.push(fb.finish(g, num_free_vars + 1));
+            result.push(LayerDetail::Forall(fb.finish(g, num_free_vars + 1)));
             let f2 = result[result.len() - 1].formula();
             let rest = gen_extra(g, f2, num_free_vars + 1);
             result.extend(rest);
@@ -36,9 +139,13 @@ fn gen_extra(g: &Globals, f: Formula<'_>, num_free_vars: u32) -> Vec<FormulaPack
         Outermost::Imp => {
             let mut reader = FormulaReader::new(f);
             reader.expect_imp(g).unwrap();
-            let _ = reader.read_formula(g);
+            let f1 = reader.read_formula(g);
             let f2 = reader.read_formula(g);
             reader.end();
+            result.push(LayerDetail::Imp(
+                f1.package(g, num_free_vars),
+                f2.package(g, num_free_vars),
+            ));
             let rest = gen_extra(g, f2, num_free_vars);
             result.extend(rest);
         }
@@ -57,10 +164,15 @@ impl TacticContext {
         result
     }
 
-    fn get_augmented_formula(&self, i: usize) -> AugmentedFormula<'_> {
-        AugmentedFormula {
-            formula: self.pc.formula(i),
-            extra: &self.extra[i],
+    fn get_augmented_formula(&self, i: usize) -> Option<AugmentedFormula<'_>> {
+        if let Extra::Layers(layers) = &self.extra[i] {
+            Some(AugmentedFormula {
+                formula: self.pc.formula(i),
+                num_free_vars: self.pc.formula_free_vars(i),
+                layers,
+            })
+        } else {
+            None
         }
     }
 
