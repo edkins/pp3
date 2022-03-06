@@ -189,7 +189,7 @@ mod sym {
 
 use sym::Sym;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Formula<'a> {
     slice: &'a [u32],
     num_free_vars: u32,
@@ -215,6 +215,13 @@ pub enum Outermost {
 const ZERO:Sym = Sym::literal(0);
 
 impl FormulaPackage {
+    pub fn dummy(num_free_vars: u32) -> Self {
+        FormulaPackage {
+            vec: vec![ZERO.0],
+            num_free_vars,
+        }
+    }
+
     pub fn formula(&self) -> Formula<'_> {
         Formula { slice: &self.vec, num_free_vars: self.num_free_vars }
     }
@@ -423,25 +430,29 @@ impl FormulaPackage {
         let num_resulting_free_vars = f2.num_free_vars;
         let mut vec = vec![];
         let mut depth = 0;
-        let mut first = true;
-        for item in f.iter() {
-            if first {
-                if !item.is_specific_quantifier(existential) {
-                    panic!("Not correct quantifier");
-                }
-                first = false;
-            } else if let Some(varnum) = item.get_bound_var_num() {
+
+        if !f.get(0).is_specific_quantifier(existential) {
+            panic!("Not correct quantifier");
+        }
+        for i in 1..f.len()-1 {
+            let item = f.get(i);
+            if let Some(varnum) = item.get_bound_var_num() {
                 if varnum == depth {
                     vec.extend_from_slice(f2.slice);
                 } else {
                     vec.push(item.0);
                 }
             } else {
+                if item.is_quantifier() {
+                    depth += 1;
+                } else if item == Sym::scope_end() {
+                    depth -= 1;
+                }
                 vec.push(item.0);
             }
         }
-        if first {
-            panic!("Not expecting empty formula");
+        if f.get(f.len()-1) != Sym::scope_end() {
+            panic!("No scope end");
         }
         FormulaPackage {
             vec,
@@ -451,6 +462,10 @@ impl FormulaPackage {
 }
 
 impl<'a> Formula<'a> {
+    pub fn num_free_vars(self) -> u32 {
+        self.num_free_vars
+    }
+
     pub fn iter(self) -> impl Iterator<Item=Sym> + 'a {
         self.slice.iter().map(|n|Sym(*n))
     }
@@ -465,7 +480,10 @@ impl<'a> Formula<'a> {
 
     pub fn to_string(self, g: &Globals) -> String {
         let mut result = String::new();
-        slice_to_string(&mut result, self.slice, g, 0);
+        let garbage = slice_to_string(&mut result, self.slice, g, 0);
+        if !garbage.is_empty() {
+            panic!("Trailing garbage when printing formula");
+        }
         result
     }
 
@@ -623,14 +641,14 @@ fn slice_to_string<'a>(
         }
         &slice[1..]
     } else {
-        panic!("Unexpected kind");
+        panic!("Unexpected kind: {:x}", item);
     }
 }
 
 pub fn first_term_len(g: &Globals, slice: &[u32]) -> usize {
     let item = Sym(slice[0]);
     if item.is_quantifier() {
-        1 + first_term_len(g, &slice[1..])
+        2 + first_term_len(g, &slice[1..])
     } else {
         let mut result = 1;
         for _ in 0..item.arity(g) {
@@ -640,6 +658,7 @@ pub fn first_term_len(g: &Globals, slice: &[u32]) -> usize {
     }
 }
 
+#[derive(Debug)]
 pub struct FormulaReader<'a> {
     remainder: &'a [u32],
     terms_remaining: u32,
@@ -866,5 +885,58 @@ mod tests {
             &fp.to_string(g),
             "@b0.rimp(eq(b0,b0),#b1.eq(b0,b1))"
         );
+    }
+
+    #[test]
+    fn subst_quantified() {
+        let g = &Globals::default();
+        let x0 = FreeVar::new(0);
+        let x1 = FreeVar::new(1);
+
+        let xyf = FormulaPackage::global_pkgs(&g, globals::ADD, 2, &[FormulaPackage::free_var(x0,2),FormulaPackage::free_var(x1,2)]);
+        let allxf = FormulaPackage::forall(x0, FormulaPackage::free_var(x0,1).formula());
+        let fp = FormulaPackage::subst_quantified_var(g, allxf.formula(), xyf.formula(), false);
+        assert_eq!(fp.num_free_vars(), 2);
+        assert_eq!(fp.to_string(g), "add(f0,f1)");
+    }
+
+    #[test]
+    fn subst_quantified_with_free() {
+        let g = &Globals::default();
+        let x0 = FreeVar::new(0);
+        let x1 = FreeVar::new(1);
+
+        let xyf = FormulaPackage::global_pkgs(&g, globals::ADD, 2, &[FormulaPackage::free_var(x0,2),FormulaPackage::free_var(x1,2)]);
+        let ally = FormulaPackage::forall(x1, xyf.formula());
+        let fp = FormulaPackage::subst_quantified_var(g, ally.formula(), xyf.formula(), false);
+        assert_eq!(fp.num_free_vars(), 2);
+        assert_eq!(fp.to_string(g), "add(f0,add(f0,f1))");
+    }
+
+    #[test]
+    fn subst_quantified_with_bound_simple() {
+        let g = &Globals::default();
+        let x0 = FreeVar::new(0);
+        let x1 = FreeVar::new(1);
+
+        let lit = FormulaPackage::literal_u32(123,0);
+        let xyf = FormulaPackage::global_pkgs(&g, globals::ADD, 2, &[FormulaPackage::free_var(x0,2),FormulaPackage::free_var(x1,2)]);
+        let allxy = FormulaPackage::forall(x0, FormulaPackage::forall(x1, xyf.formula()).formula());
+        let fp = FormulaPackage::subst_quantified_var(g, allxy.formula(), lit.formula(), false);
+        assert_eq!(fp.num_free_vars(), 0);
+        assert_eq!(fp.to_string(g), "@b0.add(123,b0)");
+    }
+
+    #[test]
+    fn subst_quantified_with_bound() {
+        let g = &Globals::default();
+        let x0 = FreeVar::new(0);
+        let x1 = FreeVar::new(1);
+
+        let xyf = FormulaPackage::global_pkgs(&g, globals::ADD, 2, &[FormulaPackage::free_var(x0,2),FormulaPackage::free_var(x1,2)]);
+        let allxy = FormulaPackage::forall(x0, FormulaPackage::forall(x1, xyf.formula()).formula());
+        let fp = FormulaPackage::subst_quantified_var(g, allxy.formula(), xyf.formula(), false);
+        assert_eq!(fp.num_free_vars(), 2);
+        assert_eq!(fp.to_string(g), "@b0.add(add(f0,f1),b0)");
     }
 }

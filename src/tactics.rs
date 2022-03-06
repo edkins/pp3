@@ -230,7 +230,7 @@ impl TacticContext {
                     result?;
                 }
                 Line::Imp(hyp, bx) => {
-                    self.pc.begin_imp_box(g, hyp);
+                    self.pc.begin_imp_box(g, hyp.formula());
                     let result = self.process(g, bx);
                     self.pc.end_imp_box(g);
                     result?;
