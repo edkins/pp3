@@ -1,4 +1,4 @@
-use crate::formula::{FormulaPackage, FreeVar};
+use crate::formula::{FormulaPackage, FreeVar, ToFormula};
 use crate::globals::Globals;
 
 pub struct Script {

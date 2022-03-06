@@ -1,4 +1,4 @@
-use crate::formula::{Formula, FormulaPackage, FreeVar};
+use crate::formula::{FormulaPackage, FreeVar, ToFormula};
 use crate::globals::{self, GlobalSymbol, Globals};
 use crate::script::{Line, Script};
 use std::collections::HashMap;
@@ -76,7 +76,7 @@ impl ParseResult {
         }
     }
 
-    fn into_line(self, g: &Globals, ctx: &Context) -> Result<Line, ParseError> {
+    fn into_line(self, _g: &Globals, _ctx: &Context) -> Result<Line, ParseError> {
         match self {
             ParseResult::Formula(f) => Ok(Line::Formula(f)),
             ParseResult::Forall(x, lines) => Ok(Line::Forall(x, Script::new(lines))),
@@ -222,7 +222,7 @@ impl<'a> Parser<'a> {
         &mut self,
         g: &Globals,
         ctx: &Context,
-        x: Formula<'_>,
+        x: impl ToFormula,
     ) -> Result<FormulaPackage, ParseError> {
         match self.token(ctx)? {
             Token::Word(Word::Global(sym)) => {
@@ -248,14 +248,17 @@ impl<'a> Parser<'a> {
         allow_line: bool,
     ) -> Result<ParseResult, ParseError> {
         match self.token(ctx)? {
-            Token::Number(n) => Ok(ParseResult::Formula(FormulaPackage::literal_u32(n, ctx.num_free_vars))),
+            Token::Number(n) => Ok(ParseResult::Formula(FormulaPackage::literal_u32(
+                n,
+                ctx.num_free_vars,
+            ))),
             Token::Word(Word::Global(sym)) => {
                 let arity = g.get_arity(sym);
                 let mut params = Vec::with_capacity(arity as usize);
                 if arity != 0 {
                     self.insist(ctx, Token::Char('('))?;
                     for i in 0..arity {
-                        let (param,t) = self.parse_formula(g, ctx, Tightness::Formula)?;
+                        let (param, t) = self.parse_formula(g, ctx, Tightness::Formula)?;
                         params.push(param);
                         if i == arity - 1 {
                             if t != Token::Char(')') {
@@ -266,7 +269,7 @@ impl<'a> Parser<'a> {
                         }
                     }
                 }
-                let fp = FormulaPackage::global_pkgs(g, sym, ctx.num_free_vars, &params);
+                let fp = FormulaPackage::global(g, sym, ctx.num_free_vars, &params);
                 Ok(ParseResult::Formula(fp))
             }
             Token::Word(Word::FreeVar(x)) => {
@@ -288,59 +291,65 @@ impl<'a> Parser<'a> {
                 if t != Token::Char('}') {
                     return Err(ParseError::ExpectingToken(Token::Char('}')));
                 }
-                return Ok(ParseResult::Box(lines));
+                Ok(ParseResult::Box(lines))
             }
             Token::Forall => match self.token(ctx)? {
                 Token::UndefinedSymbol(x) => {
                     self.insist(ctx, Token::Char(':'))?;
                     let (ctx2, var) = ctx.with_free_var(x)?;
-                    let fp2 = self.parse_type(g, &ctx2, FormulaPackage::free_var(var, ctx2.num_free_vars).formula())?;
+                    let fp2 = self.parse_type(
+                        g,
+                        &ctx2,
+                        FormulaPackage::free_var(var, ctx2.num_free_vars),
+                    )?;
                     match self.parse_term_or_line(g, &ctx2, allow_line)? {
-                        ParseResult::Formula(fp3) => {
-                            Ok(ParseResult::Formula(FormulaPackage::forall(var, FormulaPackage::imp(fp2.formula(), fp3.formula()).formula())))
-                        }
-                        ParseResult::Box(lines) => {
-                            return Ok(ParseResult::Forall(
-                                var,
-                                vec![Line::Imp(
-                                    fp2,
-                                    Script::new(lines),
-                                )],
-                            ));
-                        }
-                        _ => return Err(ParseError::UnexpectedProofElement),
+                        ParseResult::Formula(fp3) => Ok(ParseResult::Formula(
+                            FormulaPackage::forall(var, FormulaPackage::imp(fp2, fp3)),
+                        )),
+                        ParseResult::Box(lines) => Ok(ParseResult::Forall(
+                            var,
+                            vec![Line::Imp(fp2, Script::new(lines))],
+                        )),
+                        _ => Err(ParseError::UnexpectedProofElement),
                     }
                 }
-                Token::Word(_) => return Err(ParseError::AlreadyDefined),
-                _ => return Err(ParseError::ExpectingFreshName),
+                Token::Word(_) => Err(ParseError::AlreadyDefined),
+                _ => Err(ParseError::ExpectingFreshName),
             },
             Token::Exists => match self.token(ctx)? {
                 Token::UndefinedSymbol(x) => {
                     self.insist(ctx, Token::Char(':'))?;
                     let (ctx2, var) = ctx.with_free_var(x)?;
-                    let fp2 = self.parse_type(g, &ctx2, FormulaPackage::free_var(var, ctx2.num_free_vars).formula())?;
+                    let fp2 = self.parse_type(
+                        g,
+                        &ctx2,
+                        FormulaPackage::free_var(var, ctx2.num_free_vars),
+                    )?;
                     let fp3 = self.parse_term(g, &ctx2)?;
 
-                    Ok(ParseResult::Formula(FormulaPackage::exists(var, FormulaPackage::and(fp2.formula(), fp3.formula()).formula())))
+                    Ok(ParseResult::Formula(FormulaPackage::exists(
+                        var,
+                        FormulaPackage::and(fp2, fp3),
+                    )))
                 }
-                Token::Word(_) => return Err(ParseError::AlreadyDefined),
-                _ => return Err(ParseError::ExpectingFreshName),
+                Token::Word(_) => Err(ParseError::AlreadyDefined),
+                _ => Err(ParseError::ExpectingFreshName),
             },
             Token::Char('}') => {
                 if allow_line {
-                    return Ok(ParseResult::CloseBrace);
+                    Ok(ParseResult::CloseBrace)
                 } else {
-                    return Err(ParseError::ExpectingTerm);
+                    Err(ParseError::ExpectingTerm)
                 }
             }
             Token::Eof => {
                 if allow_line {
-                    return Ok(ParseResult::Eof);
+                    Ok(ParseResult::Eof)
                 } else {
-                    return Err(ParseError::ExpectingTerm);
+                    Err(ParseError::ExpectingTerm)
                 }
             }
-            _ => return Err(ParseError::ExpectingTerm),
+            _ => Err(ParseError::ExpectingTerm),
         }
     }
 
@@ -394,18 +403,15 @@ impl<'a> Parser<'a> {
                             match pair.0 {
                                 ParseResult::Formula(f) => {
                                     fp = if reverse {
-                                        FormulaPackage::global(g, sym, ctx.num_free_vars, &[f.formula(), fp.formula()])
+                                        FormulaPackage::global(g, sym, ctx.num_free_vars, &[f, fp])
                                     } else {
-                                        FormulaPackage::global(g, sym, ctx.num_free_vars, &[fp.formula(), f.formula()])
+                                        FormulaPackage::global(g, sym, ctx.num_free_vars, &[fp, f])
                                     };
                                     t = pair.1.unwrap();
                                 }
                                 ParseResult::Box(lines) => {
                                     if allow_line && t == Token::Arrow {
-                                        let result = ParseResult::Imp(
-                                            fp,
-                                            lines,
-                                        );
+                                        let result = ParseResult::Imp(fp, lines);
                                         return Ok((result, pair.1));
                                     } else {
                                         return Err(ParseError::UnexpectedProofElement);
@@ -430,7 +436,7 @@ impl<'a> Parser<'a> {
         g: &Globals,
         ctx: &Context,
     ) -> Result<FormulaPackage, ParseError> {
-        let (fp,t) = self.parse_formula(g, ctx, Tightness::Formula)?;
+        let (fp, t) = self.parse_formula(g, ctx, Tightness::Formula)?;
         if t != Token::Eof {
             return Err(ParseError::ExpectingEof);
         }

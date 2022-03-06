@@ -1,4 +1,4 @@
-use crate::formula::{Formula, FormulaPackage, FormulaReader, FreeVar, Outermost};
+use crate::formula::{Formula, FormulaPackage, FormulaReader, FreeVar, Outermost, ToFormula};
 use crate::globals::Globals;
 use crate::proof::ProofContext;
 use crate::script::{Line, Script};
@@ -103,10 +103,7 @@ impl<'a> AugmentedFormula<'a> {
         ) {
             let specializations = specs
                 .iter()
-                .map(|spec| {
-                    spec.unwrap_or_else(Formula::dummy)
-                        .package(g)
-                })
+                .map(|spec| spec.unwrap_or_else(Formula::dummy).package(g))
                 .collect();
             let hypotheses = other
                 .layers
@@ -129,7 +126,12 @@ fn gen_extra(g: &Globals, f: Formula<'_>, num_free_vars: u32) -> Vec<LayerDetail
     match f.outermost() {
         Outermost::Forall => {
             let var = FreeVar::new(num_free_vars);
-            let fp = FormulaPackage::subst_quantified_var(g, f, FormulaPackage::free_var(var, num_free_vars+1).formula(), false);
+            let fp = FormulaPackage::subst_quantified_var(
+                g,
+                f,
+                FormulaPackage::free_var(var, num_free_vars + 1).formula(),
+                false,
+            );
             result.push(LayerDetail::Forall(fp));
             let f2 = result[result.len() - 1].formula();
             let rest = gen_extra(g, f2, num_free_vars + 1);
@@ -141,10 +143,7 @@ fn gen_extra(g: &Globals, f: Formula<'_>, num_free_vars: u32) -> Vec<LayerDetail
             let f1 = reader.read_formula(g, num_free_vars);
             let f2 = reader.read_formula(g, num_free_vars);
             reader.end();
-            result.push(LayerDetail::Imp(
-                f2.package(g),
-                f1.package(g),
-            ));
+            result.push(LayerDetail::Imp(f2.package(g), f1.package(g)));
             let rest = gen_extra(g, f1, num_free_vars);
             result.extend(rest);
         }

@@ -1,5 +1,5 @@
 use crate::axioms;
-use crate::formula::{Formula, FormulaPackage, FormulaReader, FreeVar};
+use crate::formula::{Formula, FormulaPackage, FormulaReader, FreeVar, ToFormula};
 use crate::globals::{self, Globals};
 
 pub struct ProofContext {
@@ -44,7 +44,7 @@ impl ProofContext {
     }
 
     pub fn conclusion(&self) -> Formula<'_> {
-        self.prev_conclusion(self.facts.len()-1)
+        self.prev_conclusion(self.facts.len() - 1)
     }
 
     pub fn num_formulas(&self) -> usize {
@@ -66,11 +66,11 @@ impl ProofContext {
             while num_boxes_printed < fact.num_boxes {
                 match &self.boxes[num_boxes_printed] {
                     ProofBox::Forall(x) => println!("forall {x}"),
-                    ProofBox::Imp(h) => println!("assume {}", h.formula().to_string(g)),
+                    ProofBox::Imp(h) => println!("assume {}", h.to_string(g)),
                 }
                 num_boxes_printed += 1;
             }
-            println!("   {}", fact.fact.formula().to_string(g));
+            println!("   {}", fact.fact.to_string(g));
         }
         println!(">>>>");
     }
@@ -99,7 +99,7 @@ impl ProofContext {
         self.boxes.push(ProofBox::Forall(var));
     }
 
-    pub fn end_imp_box(&mut self, g: &Globals) -> usize {
+    pub fn end_imp_box(&mut self, _g: &Globals) -> usize {
         if let Some(ProofBox::Imp(h)) = self.boxes.pop() {
             if let Some(conclusion) = self.facts.pop() {
                 if conclusion.num_boxes <= self.boxes.len() {
@@ -111,7 +111,7 @@ impl ProofContext {
                         break;
                     }
                 }
-                let fact = FormulaPackage::imp(h.formula(), conclusion.fact.formula());
+                let fact = FormulaPackage::imp(h, conclusion.fact);
                 self.facts.push(Fact {
                     num_boxes: self.boxes.len(),
                     fact,
@@ -125,7 +125,7 @@ impl ProofContext {
         }
     }
 
-    pub fn end_forall_box(&mut self, g: &Globals) -> usize {
+    pub fn end_forall_box(&mut self, _g: &Globals) -> usize {
         if let Some(ProofBox::Forall(x)) = self.boxes.pop() {
             if let Some(conclusion) = self.facts.pop() {
                 if conclusion.num_boxes <= self.boxes.len() {
@@ -138,7 +138,7 @@ impl ProofContext {
                     }
                 }
                 self.num_free_vars -= 1;
-                let fact = FormulaPackage::forall(x, conclusion.fact.formula());
+                let fact = FormulaPackage::forall(x, conclusion.fact);
                 self.facts.push(Fact {
                     num_boxes: self.boxes.len(),
                     fact,
@@ -152,7 +152,7 @@ impl ProofContext {
         }
     }
 
-    fn push_fp(&mut self, g: &Globals, fact: FormulaPackage) -> usize {
+    fn push_fp(&mut self, _g: &Globals, fact: FormulaPackage) -> usize {
         self.facts.push(Fact {
             num_boxes: self.boxes.len(),
             fact,
@@ -163,7 +163,7 @@ impl ProofContext {
     pub fn imp_elim(&mut self, g: &Globals, i: usize, j: usize) -> usize {
         let mut reader = FormulaReader::new(self.facts[i].fact.formula());
         let num_free_vars = self.facts[i].fact.num_free_vars();
-        let hyp = self.facts[j].fact.formula();
+        let hyp = &self.facts[j].fact;
         reader.expect_rimp(g).expect("Expecting rimp");
         let conc = reader.read_formula(g, num_free_vars);
         println!("conc: {}", conc.to_string(g));
@@ -177,16 +177,21 @@ impl ProofContext {
         self.facts.len() - 1
     }
 
-    pub fn forall_elim(&mut self, g: &Globals, i: usize, value: Formula<'_>) -> usize {
+    pub fn forall_elim(&mut self, g: &Globals, i: usize, value: impl ToFormula) -> usize {
         if value.num_free_vars() > self.num_free_vars {
             panic!("Too many free vars in value");
         }
-        let fp = FormulaPackage::subst_quantified_var(g, self.facts[i].fact.formula(), value, false);
+        let fp = FormulaPackage::subst_quantified_var(g, &self.facts[i].fact, value, false);
         self.push_fp(g, fp)
     }
 
     pub fn nat_literal_u32(&mut self, g: &Globals, n: u32) -> usize {
-        let fp = FormulaPackage::global_pkgs(g, globals::NAT, self.num_free_vars, &[FormulaPackage::literal_u32(n, self.num_free_vars)]);
+        let fp = FormulaPackage::global(
+            g,
+            globals::NAT,
+            self.num_free_vars,
+            &[FormulaPackage::literal_u32(n, self.num_free_vars)],
+        );
         self.push_fp(g, fp)
     }
 }
@@ -208,7 +213,7 @@ mod test {
     fn specialize_axiom() {
         let g = &Globals::default();
         let mut pc = ProofContext::new(g);
-        let i0 = pc.forall_elim(g, axioms::add_0_r, FormulaPackage::literal_u32(3,0).formula());
+        let i0 = pc.forall_elim(g, axioms::ADD_0_R, FormulaPackage::literal_u32(3, 0));
         let i1 = pc.nat_literal_u32(g, 3);
         let _ = pc.imp_elim(g, i0, i1);
         assert_eq!(pc.conclusion().to_string(g), "eq(add(3,0),3)");
@@ -216,8 +221,7 @@ mod test {
 
     #[test]
     #[should_panic]
-    fn wrong_forall()
-    {
+    fn wrong_forall() {
         let g = &Globals::default();
         let mut pc = ProofContext::new(g);
         let x = FreeVar::new(0);
@@ -230,29 +234,38 @@ mod test {
     fn swap_vars() {
         let g = &Globals::default();
         let mut pc = ProofContext::new(g);
-        assert_eq!(pc.prev_conclusion(axioms::add_succ_r).to_string(g), "@b0.rimp(@b1.rimp(eq(add(b0,add(b1,1)),add(add(b0,b1),1)),nat(b1)),nat(b0))");
+        assert_eq!(
+            pc.prev_conclusion(axioms::ADD_SUCC_R).to_string(g),
+            "@b0.rimp(@b1.rimp(eq(add(b0,add(b1,1)),add(add(b0,b1),1)),nat(b1)),nat(b0))"
+        );
         let x = FreeVar::new(0);
         let xfp = FormulaPackage::free_var(x, 1);
-        let xf = xfp.formula();
         pc.begin_forall_box(g, x);
-        let xnat = pc.begin_imp_box(&g, FormulaPackage::global(&g, globals::NAT, 1, &[xf]).formula());
+        let xnat = pc.begin_imp_box(
+            &g,
+            FormulaPackage::global(&g, globals::NAT, 1, &[xfp]).formula(),
+        );
 
         let y = FreeVar::new(1);
         let yfp = FormulaPackage::free_var(y, 2);
-        let yf = yfp .formula();
         let xfp2 = FormulaPackage::free_var(x, 2);
-        let xf2 = xfp2.formula();
         pc.begin_forall_box(g, y);
-        let ynat = pc.begin_imp_box(g, FormulaPackage::global(&g, globals::NAT, 2, &[yf]).formula());
+        let ynat = pc.begin_imp_box(
+            g,
+            FormulaPackage::global(&g, globals::NAT, 2, &[&yfp]).formula(),
+        );
 
-        let spec0 = pc.forall_elim(g, axioms::add_succ_r, yf);
+        let spec0 = pc.forall_elim(g, axioms::ADD_SUCC_R, yfp);
         let spec1 = pc.imp_elim(g, spec0, ynat);
-        let spec2 = pc.forall_elim(g, spec1, xf2);
-        let spec3 = pc.imp_elim(g, spec2, xnat);
+        let spec2 = pc.forall_elim(g, spec1, xfp2);
+        pc.imp_elim(g, spec2, xnat);
         pc.end_imp_box(g);
         pc.end_forall_box(g);
         pc.end_imp_box(g);
         pc.end_forall_box(g);
-        assert_eq!(pc.conclusion().to_string(g), "@b0.rimp(@b1.rimp(eq(add(b1,add(b0,1)),add(add(b1,b0),1)),nat(b1)),nat(b0))");
+        assert_eq!(
+            pc.conclusion().to_string(g),
+            "@b0.rimp(@b1.rimp(eq(add(b1,add(b0,1)),add(add(b1,b0),1)),nat(b1)),nat(b0))"
+        );
     }
 }
