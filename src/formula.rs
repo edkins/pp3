@@ -93,12 +93,24 @@ mod sym {
             Sym(GLOBAL + gs.sym())
         }
 
+        pub fn rimp() -> Sym {
+            Sym::global(globals::RIMP)
+        }
+
         pub fn forall() -> Sym {
             Sym(FORALL)
         }
 
         pub fn exists() -> Sym {
             Sym(EXISTS)
+        }
+
+        pub fn quantifier(existential: bool) -> Sym {
+            if existential {
+                Sym::exists()
+            } else {
+                Sym::forall()
+            }
         }
 
         pub fn scope_end() -> Sym {
@@ -161,6 +173,14 @@ mod sym {
             self.kind() == FORALL || self.kind() == EXISTS
         }
 
+        pub fn is_specific_quantifier(self, existential: bool) -> bool {
+            if existential {
+                self.kind() == EXISTS
+            } else {
+                self.kind() == FORALL
+            }
+        }
+
         pub fn is_rimp(self) -> bool {
             self.0 == GLOBAL + globals::RIMP.sym()
         }
@@ -168,11 +188,6 @@ mod sym {
 }
 
 use sym::Sym;
-
-pub struct FormulaBuilder {
-    vec: Vec<u32>,
-    terms_remaining: u32,
-}
 
 #[derive(Clone, Copy)]
 pub struct Formula<'a> {
@@ -207,6 +222,232 @@ impl FormulaPackage {
     pub fn num_free_vars(&self) -> u32 {
         self.num_free_vars
     }
+
+    pub fn to_string(&self, g: &Globals) -> String {
+        self.formula().to_string(g)
+    }
+
+    pub fn literal_u32(n: u32, num_free_vars: u32) -> Self {
+        FormulaPackage {
+            vec: vec![Sym::literal(n).0],
+            num_free_vars,
+        }
+    }
+
+    pub fn global_pkgs(g: &Globals, gsym: GlobalSymbol, num_free_vars: u32, params: &[FormulaPackage]) -> Self {
+        let sym = Sym::global(gsym);
+        if params.len() != sym.arity(g) as usize {
+            panic!("Arity mismatch in global");
+        }
+        let mut vec = vec![];
+        vec.push(sym.0);
+        for param in params {
+            if param.num_free_vars != num_free_vars {
+                panic!("Free var count mismatch in global");
+            }
+            vec.extend_from_slice(&param.vec);
+        }
+        FormulaPackage {
+            vec,
+            num_free_vars,
+        }
+    }
+
+    pub fn global(g: &Globals, gsym: GlobalSymbol, num_free_vars: u32, params: &[Formula<'_>]) -> Self {
+        let sym = Sym::global(gsym);
+        if params.len() != sym.arity(g) as usize {
+            panic!("Arity mismatch in global");
+        }
+        let mut vec = vec![];
+        vec.push(sym.0);
+        for param in params {
+            if param.num_free_vars != num_free_vars {
+                panic!("Free var count mismatch in global");
+            }
+            vec.extend_from_slice(param.slice);
+        }
+        FormulaPackage {
+            vec,
+            num_free_vars,
+        }
+    }
+
+    pub fn imp(hyp: Formula<'_>, conc: Formula<'_>) -> Self {
+        if hyp.num_free_vars != conc.num_free_vars {
+            panic!("Free var count mismatch in imp");
+        }
+        let mut vec = vec![];
+        vec.push(Sym::rimp().0);
+        vec.extend_from_slice(conc.slice);
+        vec.extend_from_slice(hyp.slice);
+        FormulaPackage {
+            vec,
+            num_free_vars: conc.num_free_vars,
+        }
+    }
+
+    pub fn and(x: Formula<'_>, y: Formula<'_>) -> Self {
+        if x.num_free_vars != y.num_free_vars {
+            panic!("Free var count mismatch in and");
+        }
+        let mut vec = vec![];
+        vec.push(Sym::global(globals::AND).0);
+        vec.extend_from_slice(x.slice);
+        vec.extend_from_slice(y.slice);
+        FormulaPackage {
+            vec,
+            num_free_vars: x.num_free_vars,
+        }
+    }
+
+    pub fn not(x: Formula<'_>) -> Self {
+        let mut vec = vec![];
+        vec.push(Sym::global(globals::NOT).0);
+        vec.extend_from_slice(x.slice);
+        FormulaPackage {
+            vec,
+            num_free_vars: x.num_free_vars,
+        }
+    }
+
+    pub fn eq(x: Formula<'_>, y: Formula<'_>) -> Self {
+        if x.num_free_vars != y.num_free_vars {
+            panic!("Free var count mismatch in eq");
+        }
+        let mut vec = vec![];
+        vec.push(Sym::global(globals::EQ).0);
+        vec.extend_from_slice(x.slice);
+        vec.extend_from_slice(y.slice);
+        FormulaPackage {
+            vec,
+            num_free_vars: x.num_free_vars,
+        }
+    }
+
+    pub fn free_var(var: FreeVar, num_free_vars: u32) -> Self {
+        if var.index() >= num_free_vars {
+            panic!("Free var out of range");
+        }
+        FormulaPackage {
+            vec: vec![Sym::free_var(var).0],
+            num_free_vars,
+        }
+    }
+
+    fn quantify(var: FreeVar, f: Formula<'_>, existential: bool) -> Self {
+        if var.index() + 1 != f.num_free_vars {
+            panic!("Binding the wrong variable in forall");
+        }
+        let mut vec = vec![];
+        let exact = Sym::free_var(var);
+        let mut depth = 0;
+        vec.push(Sym::quantifier(existential).0);
+        for item in f.iter() {
+            if item == exact {
+                vec.push(Sym::bound_var(depth).0);
+            } else {
+                if item.is_quantifier() {
+                    depth = depth.checked_add(1).expect("Depth should not exceed max");
+                } else if item == Sym::scope_end() {
+                    if depth == 0 {
+                        panic!("Depth should not be 0 here");
+                    }
+                    depth -= 1;
+                }
+                vec.push(item.0);
+            }
+        }
+        if depth != 0 {
+            panic!("Depth should be 0 here");
+        }
+        vec.push(Sym::scope_end().0);
+        FormulaPackage {
+            vec,
+            num_free_vars: f.num_free_vars - 1,
+        }
+    }
+
+    pub fn forall(var: FreeVar, f: Formula<'_>) -> Self {
+        FormulaPackage::quantify(var, f, false)
+    }
+
+    pub fn exists(var: FreeVar, f: Formula<'_>) -> Self {
+        FormulaPackage::quantify(var, f, true)
+    }
+
+    pub fn truth(num_free_vars: u32) -> Self {
+        FormulaPackage {
+            vec: vec![Sym::global(globals::TRUE).0],
+            num_free_vars,
+        }
+    }
+
+    pub fn falsehood(num_free_vars: u32) -> Self {
+        FormulaPackage {
+            vec: vec![Sym::global(globals::FALSE).0],
+            num_free_vars,
+        }
+    }
+
+    pub fn subst_free_vars(f: Formula<'_>, fs: &[Formula<'_>], num_resulting_free_vars: u32) -> Self {
+        if fs.len() > f.num_free_vars as usize {
+            panic!("Substituting too many vars");
+        }
+        for fi in fs {
+            if fi.num_free_vars != num_resulting_free_vars {
+                panic!("Wrong number of free vars in substituted formula");
+            }
+        }
+        let start_index = f.num_free_vars - (fs.len() as u32);
+        let end_index = f.num_free_vars;
+        let mut vec = vec![];
+        for item in f.iter() {
+            if let Some(varnum) = item.get_free_var_num() {
+                if varnum >= start_index && varnum < end_index {
+                    let i = (varnum - start_index) as usize;
+                    vec.extend_from_slice(fs[i].slice);
+                } else {
+                    vec.push(item.0);
+                }
+            } else {
+                vec.push(item.0);
+            }
+        }
+        FormulaPackage {
+            vec,
+            num_free_vars: num_resulting_free_vars
+        }
+    }
+
+    pub fn subst_quantified_var(g: &Globals, f: Formula<'_>, f2: Formula<'_>, existential: bool) -> Self {
+        let num_resulting_free_vars = f2.num_free_vars;
+        let mut vec = vec![];
+        let mut depth = 0;
+        let mut first = true;
+        for item in f.iter() {
+            if first {
+                if !item.is_specific_quantifier(existential) {
+                    panic!("Not correct quantifier");
+                }
+                first = false;
+            } else if let Some(varnum) = item.get_bound_var_num() {
+                if varnum == depth {
+                    vec.extend_from_slice(f2.slice);
+                } else {
+                    vec.push(item.0);
+                }
+            } else {
+                vec.push(item.0);
+            }
+        }
+        if first {
+            panic!("Not expecting empty formula");
+        }
+        FormulaPackage {
+            vec,
+            num_free_vars: num_resulting_free_vars
+        }
+    }
 }
 
 impl<'a> Formula<'a> {
@@ -235,7 +476,8 @@ impl<'a> Formula<'a> {
         }
     }
 
-    pub fn package(self, _g: &Globals, num_free_vars: u32) -> FormulaPackage {
+    pub fn package(self, _g: &Globals) -> FormulaPackage {
+        let num_free_vars = self.num_free_vars;
         for item in self.iter() {
             if let Some(varnum) = item.get_free_var_num() {
                 if varnum >= num_free_vars {
@@ -331,15 +573,6 @@ impl fmt::Display for FreeVar {
     }
 }
 
-impl Default for FormulaBuilder {
-    fn default() -> Self {
-        FormulaBuilder {
-            vec: vec![],
-            terms_remaining: 1,
-        }
-    }
-}
-
 fn boundvar_name(i: u32) -> String {
     format!("b{}", i)
 }
@@ -391,219 +624,6 @@ fn slice_to_string<'a>(
         &slice[1..]
     } else {
         panic!("Unexpected kind");
-    }
-}
-
-impl FormulaBuilder {
-    #[cfg(test)]
-    pub fn to_string(&self, g: &Globals) -> String {
-        if self.terms_remaining != 0 {
-            panic!("Terms remaining");
-        }
-        let mut result = String::new();
-        slice_to_string(&mut result, &self.vec, g, 0);
-        result
-    }
-
-    fn formula(&self, num_free_vars: u32) -> Formula<'_> {
-        if self.terms_remaining != 0 {
-            panic!("Terms remaining");
-        }
-        Formula { slice: &self.vec, num_free_vars }
-    }
-
-    pub fn push_formula(&mut self, _g: &Globals, f: Formula<'_>) {
-        if self.terms_remaining == 0 {
-            panic!("No terms remaining");
-        }
-        self.vec.extend_from_slice(f.slice);
-        self.terms_remaining -= 1;
-    }
-
-    pub fn push_completed_builder(&mut self, _g: &Globals, fb: &FormulaBuilder) {
-        if self.terms_remaining == 0 {
-            panic!("No terms remaining");
-        }
-        if fb.terms_remaining != 0 {
-            panic!("Still terms remaining on pushed formula builder");
-        }
-        self.vec.extend_from_slice(&fb.vec);
-        self.terms_remaining -= 1;
-    }
-
-    pub fn push_global(&mut self, g: &Globals, gsym: GlobalSymbol) {
-        if self.terms_remaining == 0 {
-            panic!("No terms remaining");
-        }
-        let sym = Sym::global(gsym);
-        self.vec.push(sym.0);
-        self.terms_remaining = (self.terms_remaining - 1)
-            .checked_add(sym.arity(g))
-            .expect("Too many terms remaining");
-    }
-
-    pub fn push_literal_u32(&mut self, _g: &Globals, n: u32) {
-        if self.terms_remaining == 0 {
-            panic!("No terms remaining");
-        }
-        self.vec.push(Sym::literal(n).0);
-        self.terms_remaining -= 1;
-    }
-
-    pub fn push_free_var(&mut self, _g: &Globals, var: FreeVar) {
-        if self.terms_remaining == 0 {
-            panic!("No terms remaining");
-        }
-        self.vec.push(Sym::free_var(var).0);
-        self.terms_remaining -= 1;
-    }
-
-    pub fn subst_free_var(
-        &mut self,
-        _g: &Globals,
-        f: Formula<'_>,
-        var: FreeVar,
-        value: Formula<'_>,
-    ) {
-        if self.terms_remaining == 0 {
-            panic!("No terms remaining");
-        }
-        let exact = Sym::free_var(var);
-        for item in f.iter() {
-            if item == exact {
-                self.vec.extend_from_slice(value.slice);
-            } else {
-                self.vec.push(item.0);
-            }
-        }
-        self.terms_remaining -= 1;
-    }
-
-    pub fn subst_quantified_var_with_free_var(
-        &mut self,
-        g: &Globals,
-        f: Formula<'_>,
-        value: FreeVar,
-        existential: bool,
-        num_free_vars: u32,
-    ) {
-        let mut fb = FormulaBuilder::default();
-        fb.push_free_var(g, value);
-        self.subst_quantified_var(g, f, fb.formula(num_free_vars), existential);
-    }
-
-    pub fn subst_quantified_var(
-        &mut self,
-        _g: &Globals,
-        f: Formula<'_>,
-        value: Formula<'_>,
-        existential: bool,
-    ) {
-        if Sym(f.slice[0]) != (if existential { Sym::exists() } else { Sym::forall() }) {
-            panic!("Does not start with expected quantifier");
-        }
-        let mut depth = 0;
-        for item in &f.slice[1..f.slice.len() - 1] {
-            let sym = Sym(*item);
-            if sym == Sym::bound_var(depth) {
-                self.vec.extend_from_slice(value.slice);
-            } else {
-                if sym.is_quantifier() {
-                    depth += 1;
-                    self.vec.push(*item);
-                } else if sym == Sym::scope_end() {
-                    if depth == 0 {
-                        panic!("Unexpected end of scope");
-                    }
-                    depth -= 1;
-                }
-                self.vec.push(sym.0);
-            }
-        }
-        if depth != 0 {
-            panic!("Unexpectedly still in a scope");
-        }
-    }
-
-    pub fn quantify_free_var(
-        &mut self,
-        _g: &Globals,
-        f: Formula<'_>,
-        var: FreeVar,
-        existential: bool,
-    ) {
-        self.quantify_from_slice(f.slice, var, existential)
-    }
-
-    pub fn quantify_completed_free_var(
-        &mut self,
-        _g: &Globals,
-        f: &FormulaBuilder,
-        var: FreeVar,
-        existential: bool,
-    ) {
-        if f.terms_remaining != 0 {
-            panic!("Still terms remaining");
-        }
-        self.quantify_from_slice(&f.vec, var, existential)
-    }
-
-    fn quantify_from_slice(&mut self, slice: &[u32], var: FreeVar, existential: bool) {
-        if self.terms_remaining == 0 {
-            panic!("No terms remaining");
-        }
-        let exact = Sym::free_var(var);
-        let mut depth = 0;
-        if existential {
-            self.vec.push(Sym::exists().0);
-        } else {
-            self.vec.push(Sym::forall().0);
-        }
-        for item in slice {
-            let sym = Sym(*item);
-            if sym == exact {
-                self.vec.push(Sym::bound_var(depth).0);
-            } else {
-                if sym.is_quantifier() {
-                    depth += 1;
-                    if depth > sym::MAX_VARNUM {
-                        panic!("Too deep");
-                    }
-                } else if sym == Sym::scope_end() {
-                    if depth == 0 {
-                        panic!("Mismatched scope end");
-                    }
-                    depth -= 1;
-                }
-                self.vec.push(sym.0);
-            }
-        }
-        if depth != 0 {
-            panic!("Missing scope end");
-        }
-        self.vec.push(Sym::scope_end().0);
-        self.terms_remaining -= 1;
-    }
-
-    fn iter(&self) -> impl Iterator<Item=Sym> + '_ {
-        self.vec.iter().map(|n|Sym(*n))
-    }
-
-    pub fn finish(self, _g: &Globals, num_free_vars: u32) -> FormulaPackage {
-        if self.terms_remaining != 0 {
-            panic!("Still remaining terms");
-        }
-        for item in self.iter() {
-            if let Some(varnum) = item.get_free_var_num() {
-                if varnum >= num_free_vars {
-                    panic!("Free variable out of range");
-                }
-            }
-        }
-        FormulaPackage {
-            vec: self.vec,
-            num_free_vars,
-        }
     }
 }
 
@@ -708,205 +728,142 @@ mod tests {
     use crate::globals;
 
     #[test]
-    fn pkg_literal() {
-        let mut fb = FormulaBuilder::default();
+    fn print_literal() {
         let g = &Globals::default();
-        fb.push_literal_u32(g, 42);
-        fb.finish(g, 0);
+        let fp = FormulaPackage::literal_u32(42, 0);
+        assert_eq!(fp.to_string(g), "42");
     }
 
     #[test]
-    fn pkg_var0() {
-        let mut fb = FormulaBuilder::default();
+    fn print_var0() {
         let g = &Globals::default();
         let x = FreeVar::new(0);
-        fb.push_free_var(g, x);
-        fb.finish(g, 1);
+        let fp = FormulaPackage::free_var(x, 1);
+        assert_eq!(fp.to_string(g), "f0");
     }
 
     #[test]
     #[should_panic]
     fn pkg_var0_panic() {
-        let mut fb = FormulaBuilder::default();
         let g = &Globals::default();
         let x = FreeVar::new(0);
-        fb.push_free_var(g, x);
-        fb.finish(g, 0);
+        let _ = FormulaPackage::free_var(x, 0);
+    }
+
+    #[test]
+    fn print_var0_forall() {
+        let g = &Globals::default();
+        let x = FreeVar::new(0);
+        let fp = FormulaPackage::forall(x, FormulaPackage::free_var(x, 1).formula());
+        assert_eq!(fp.num_free_vars, 0);
+        assert_eq!(fp.to_string(g), "@b0.b0");
+    }
+
+    #[test]
+    fn print_var0_exists() {
+        let g = &Globals::default();
+        let x = FreeVar::new(0);
+        let fp = FormulaPackage::exists(x, FormulaPackage::free_var(x, 1).formula());
+        assert_eq!(fp.num_free_vars, 0);
+        assert_eq!(fp.to_string(g), "#b0.b0");
+    }
+
+    #[test]
+    fn print_rimp() {
+        let g = &Globals::default();
+        let fp = FormulaPackage::imp(FormulaPackage::truth(0).formula(), FormulaPackage::falsehood(0).formula());
+        assert_eq!(fp.to_string(g), "rimp(false(),true())");
     }
 
     #[test]
     #[should_panic]
-    fn pkg_unfinished() {
-        let fb = FormulaBuilder::default();
+    fn imp_mismatch() {
         let g = &Globals::default();
-        fb.finish(g, 0);
+        let _ = FormulaPackage::imp(FormulaPackage::truth(0).formula(), FormulaPackage::falsehood(1).formula());
     }
 
     #[test]
-    fn var0_forall() {
-        let mut fb = FormulaBuilder::default();
+    fn print_and() {
         let g = &Globals::default();
-        let x = FreeVar::new(0);
-        fb.push_free_var(g, x);
-        let pkg = fb.finish(g, 1);
-
-        let mut fb = FormulaBuilder::default();
-        fb.quantify_free_var(g, pkg.formula(), x, false);
-        fb.finish(g, 0);
-    }
-
-    #[test]
-    fn var0_exists() {
-        let mut fb = FormulaBuilder::default();
-        let g = &Globals::default();
-        let x = FreeVar::new(0);
-        fb.push_free_var(g, x);
-        let pkg = fb.finish(g, 1);
-
-        let mut fb = FormulaBuilder::default();
-        fb.quantify_free_var(g, pkg.formula(), x, true);
-        fb.finish(g, 0);
-    }
-
-    #[test]
-    fn push_f() {
-        let mut fb = FormulaBuilder::default();
-        let g = &Globals::default();
-        fb.push_literal_u32(g, 42);
-        let pkg = fb.finish(g, 0);
-
-        let mut fb = FormulaBuilder::default();
-        fb.push_formula(g, pkg.formula());
-        fb.finish(g, 0);
-    }
-
-    #[test]
-    fn push_rimp() {
-        let mut fb = FormulaBuilder::default();
-        let g = &Globals::default();
-        fb.push_global(g, globals::RIMP);
-        fb.push_global(g, globals::TRUE);
-        fb.push_global(g, globals::FALSE);
-        fb.finish(g, 0);
+        let fp = FormulaPackage::and(FormulaPackage::truth(0).formula(), FormulaPackage::falsehood(0).formula());
+        assert_eq!(fp.to_string(g), "and(true(),false())");
     }
 
     #[test]
     #[should_panic]
-    fn push_rimp_unfinished() {
-        let mut fb = FormulaBuilder::default();
+    fn and_mismatch() {
         let g = &Globals::default();
-        fb.push_global(g, globals::RIMP);
-        fb.push_global(g, globals::FALSE);
-        fb.finish(g, 0);
+        let _ = FormulaPackage::and(FormulaPackage::truth(0).formula(), FormulaPackage::falsehood(1).formula());
     }
 
     #[test]
-    fn push_not() {
-        let mut fb = FormulaBuilder::default();
+    fn print_not() {
         let g = &Globals::default();
-        fb.push_global(g, globals::NOT);
-        fb.push_global(g, globals::FALSE);
-        fb.finish(g, 0);
+        let fp = FormulaPackage::not(FormulaPackage::falsehood(0).formula());
+        assert_eq!(fp.to_string(g), "not(false())");
     }
 
     #[test]
     fn var0_subst() {
-        let mut fb = FormulaBuilder::default();
         let g = &Globals::default();
         let x = FreeVar::new(0);
-        fb.push_free_var(g, x);
-        let pkg = fb.finish(g, 1);
 
-        let mut fb = FormulaBuilder::default();
-        fb.push_literal_u32(g, 3);
-        let pkg_lit = fb.finish(g, 0);
+        let fp = FormulaPackage::free_var(x, 1);
 
-        let mut fb = FormulaBuilder::default();
-        fb.subst_free_var(g, pkg.formula(), x, pkg_lit.formula());
-        fb.finish(g, 0);
-    }
+        let fp2 = FormulaPackage::literal_u32(3, 0);
 
-    #[test]
-    fn print_n() {
-        let mut fb = FormulaBuilder::default();
-        let g = &Globals::default();
-        fb.push_literal_u32(g, 123);
-        let pkg = fb.finish(g, 0);
-        assert_eq!(&pkg.formula().to_string(g), "123");
+        let fp3 = FormulaPackage::subst_free_vars(fp.formula(), &[fp2.formula()], 0);
+
+        assert_eq!(fp3.num_free_vars, 0);
+        assert_eq!(fp3.to_string(g), "3");
     }
 
     #[test]
     fn print_free() {
-        let mut fb = FormulaBuilder::default();
         let g = &Globals::default();
         let x = FreeVar::new(0);
-        fb.push_global(g, globals::ADD);
-        fb.push_free_var(g, x);
-        fb.push_literal_u32(g, 1);
-        let pkg = fb.finish(g, 1);
-        assert_eq!(&pkg.formula().to_string(g), "add(f0,1)");
+        let fp = FormulaPackage::global_pkgs(g, globals::ADD, 1, &[FormulaPackage::free_var(x, 1), FormulaPackage::literal_u32(1,1)]);
+        assert_eq!(fp.to_string(g), "add(f0,1)");
     }
 
     #[test]
     fn print_exists() {
-        let mut fb = FormulaBuilder::default();
         let g = &Globals::default();
         let x = FreeVar::new(0);
-        fb.push_global(g, globals::EQ);
-        fb.push_free_var(g, x);
-        fb.push_literal_u32(&g, 37);
-        let pkg = fb.finish(g, 1);
-        let mut fb = FormulaBuilder::default();
-        fb.quantify_free_var(g, pkg.formula(), x, true);
-        let pkg2 = fb.finish(g, 0);
-        assert_eq!(&pkg2.formula().to_string(g), "#b0.eq(b0,37)");
+        let fp = FormulaPackage::exists(x,
+            FormulaPackage::global_pkgs(g, globals::EQ, 1, &[FormulaPackage::free_var(x, 1), FormulaPackage::literal_u32(37, 1)]).formula());
+        assert_eq!(fp.to_string(g), "#b0.eq(b0,37)");
     }
 
     #[test]
     fn print_forall() {
-        let mut fb = FormulaBuilder::default();
         let g = &Globals::default();
         let x = FreeVar::new(0);
-        fb.push_global(g, globals::NOT);
-        fb.push_free_var(g, x);
-        let pkg = fb.finish(g, 1);
-        let mut fb = FormulaBuilder::default();
-        fb.quantify_free_var(g, pkg.formula(), x, false);
-        let pkg2 = fb.finish(g, 0);
-        assert_eq!(&pkg2.formula().to_string(g), "@b0.not(b0)");
+        let fp = FormulaPackage::forall(x, FormulaPackage::not(FormulaPackage::free_var(x,1).formula()).formula());
+        assert_eq!(fp.to_string(g), "@b0.not(b0)");
     }
 
     #[test]
     fn print_bound_levels() {
-        let mut fb = FormulaBuilder::default();
         let g = &Globals::default();
         let x = FreeVar::new(0);
         let y = FreeVar::new(1);
-        fb.push_global(g, globals::EQ);
-        fb.push_free_var(g, x);
-        fb.push_free_var(g, y);
-        let pkg0 = fb.finish(g, 2);
-        println!("{}", pkg0.formula().to_string(g));
 
-        let mut fb = FormulaBuilder::default();
-        fb.quantify_free_var(g, pkg0.formula(), y, true);
-        let pkg1 = fb.finish(g, 1);
-        println!("{}", pkg1.formula().to_string(g));
-
-        let mut fb = FormulaBuilder::default();
-        fb.push_global(g, globals::RIMP);
-        fb.push_global(g, globals::EQ);
-        fb.push_free_var(g, x);
-        fb.push_free_var(g, x);
-        fb.push_formula(g, pkg1.formula());
-        let pkg2 = fb.finish(g, 1);
-        println!("{}", pkg2.formula().to_string(g));
-
-        let mut fb = FormulaBuilder::default();
-        fb.quantify_free_var(g, pkg2.formula(), x, false);
-        let pkg = fb.finish(g, 0);
+        let fp = FormulaPackage::forall(x,
+            FormulaPackage::imp(
+                FormulaPackage::exists(y,
+                    FormulaPackage::eq(
+                        FormulaPackage::free_var(x,2).formula(),
+                        FormulaPackage::free_var(y,2).formula(),
+                    ).formula(),
+                ).formula(),
+                FormulaPackage::eq(
+                    FormulaPackage::free_var(x,1).formula(),
+                    FormulaPackage::free_var(x,1).formula(),
+                ).formula(),
+            ).formula());
         assert_eq!(
-            &pkg.formula().to_string(g),
+            &fp.to_string(g),
             "@b0.rimp(eq(b0,b0),#b1.eq(b0,b1))"
         );
     }

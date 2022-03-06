@@ -1,6 +1,6 @@
 use crate::axioms;
-use crate::formula::{Formula, FormulaBuilder, FormulaPackage, FormulaReader, FreeVar};
-use crate::globals::{self, Globals};
+use crate::formula::{Formula, FormulaPackage, FormulaReader, FreeVar};
+use crate::globals::Globals;
 
 pub struct ProofContext {
     boxes: Vec<ProofBox>,
@@ -99,11 +99,7 @@ impl ProofContext {
                         break;
                     }
                 }
-                let mut fb = FormulaBuilder::default();
-                fb.push_global(g, globals::RIMP);
-                fb.push_formula(g, conclusion.fact.formula());
-                fb.push_formula(g, h.formula());
-                let fact = fb.finish(g, self.num_free_vars);
+                let fact = FormulaPackage::imp(h.formula(), conclusion.fact.formula());
                 self.facts.push(Fact {
                     num_boxes: self.boxes.len(),
                     fact,
@@ -129,9 +125,7 @@ impl ProofContext {
                     }
                 }
                 self.num_free_vars -= 1;
-                let mut fb = FormulaBuilder::default();
-                fb.quantify_free_var(g, conclusion.fact.formula(), x, false);
-                let fact = fb.finish(g, self.num_free_vars);
+                let fact = FormulaPackage::forall(x, conclusion.fact.formula());
                 self.facts.push(Fact {
                     num_boxes: self.boxes.len(),
                     fact,
@@ -144,8 +138,7 @@ impl ProofContext {
         }
     }
 
-    fn push_fb(&mut self, g: &Globals, fb: FormulaBuilder) {
-        let fact = fb.finish(g, self.num_free_vars);
+    fn push_fp(&mut self, g: &Globals, fact: FormulaPackage) {
         self.facts.push(Fact {
             num_boxes: self.boxes.len(),
             fact,
@@ -160,7 +153,7 @@ impl ProofContext {
         let conc = reader.read_formula(g, num_free_vars);
         reader.expect_formula(g, hyp).expect("Hyp mismatch");
         reader.end();
-        let fact = conc.package(g, self.num_free_vars);
+        let fact = conc.package(g);
         self.facts.push(Fact {
             num_boxes: self.boxes.len(),
             fact,
@@ -171,8 +164,7 @@ impl ProofContext {
         if value.num_free_vars() > self.num_free_vars {
             panic!("Too many free vars in value");
         }
-        let mut fb = FormulaBuilder::default();
-        fb.subst_quantified_var(g, self.facts[i].fact.formula(), value.formula(), false);
-        self.push_fb(g, fb);
+        let fp = FormulaPackage::subst_quantified_var(g, self.facts[i].fact.formula(), value.formula(), false);
+        self.push_fp(g, fp);
     }
 }

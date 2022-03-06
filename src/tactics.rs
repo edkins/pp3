@@ -1,4 +1,4 @@
-use crate::formula::{Formula, FormulaBuilder, FormulaPackage, FormulaReader, FreeVar, Outermost};
+use crate::formula::{Formula, FormulaPackage, FormulaReader, FreeVar, Outermost};
 use crate::globals::Globals;
 use crate::proof::ProofContext;
 use crate::script::{Line, Script};
@@ -105,14 +105,14 @@ impl<'a> AugmentedFormula<'a> {
                 .iter()
                 .map(|spec| {
                     spec.unwrap_or_else(Formula::dummy)
-                        .package(g, other.num_free_vars)
+                        .package(g)
                 })
                 .collect();
             let hypotheses = other
                 .layers
                 .iter()
                 .filter(|ld| ld.is_imp())
-                .map(|ld| ld.hypothesis().package(g, other.num_free_vars))
+                .map(|ld| ld.hypothesis().package(g))
                 .collect();
             Some(SpecializationResult {
                 hypotheses,
@@ -128,10 +128,9 @@ fn gen_extra(g: &Globals, f: Formula<'_>, num_free_vars: u32) -> Vec<LayerDetail
     let mut result = vec![];
     match f.outermost() {
         Outermost::Forall => {
-            let mut fb = FormulaBuilder::default();
             let var = FreeVar::new(num_free_vars);
-            fb.subst_quantified_var_with_free_var(g, f, var, false, num_free_vars);
-            result.push(LayerDetail::Forall(fb.finish(g, num_free_vars + 1)));
+            let fp = FormulaPackage::subst_quantified_var(g, f, FormulaPackage::free_var(var, num_free_vars+1).formula(), false);
+            result.push(LayerDetail::Forall(fp));
             let f2 = result[result.len() - 1].formula();
             let rest = gen_extra(g, f2, num_free_vars + 1);
             result.extend(rest);
@@ -143,8 +142,8 @@ fn gen_extra(g: &Globals, f: Formula<'_>, num_free_vars: u32) -> Vec<LayerDetail
             let f2 = reader.read_formula(g, num_free_vars);
             reader.end();
             result.push(LayerDetail::Imp(
-                f2.package(g, num_free_vars),
-                f1.package(g, num_free_vars),
+                f2.package(g),
+                f1.package(g),
             ));
             let rest = gen_extra(g, f1, num_free_vars);
             result.extend(rest);

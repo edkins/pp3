@@ -1,8 +1,7 @@
-use crate::formula::{FormulaBuilder, FormulaPackage, FreeVar};
+use crate::formula::{Formula, FormulaPackage, FreeVar};
 use crate::globals::{self, GlobalSymbol, Globals};
 use crate::script::{Line, Script};
 use std::collections::HashMap;
-use std::mem;
 
 struct Parser<'a> {
     inp: &'a str,
@@ -61,7 +60,7 @@ enum Tightness {
 }
 
 enum ParseResult {
-    Formula(FormulaBuilder),
+    Formula(FormulaPackage),
     Forall(FreeVar, Vec<Line>),
     Imp(FormulaPackage, Vec<Line>),
     Box(Vec<Line>),
@@ -70,7 +69,7 @@ enum ParseResult {
 }
 
 impl ParseResult {
-    fn expect_formula(self) -> FormulaBuilder {
+    fn expect_formula(self) -> FormulaPackage {
         match self {
             ParseResult::Formula(f) => f,
             _ => panic!("Expecting formula"),
@@ -79,7 +78,7 @@ impl ParseResult {
 
     fn into_line(self, g: &Globals, ctx: &Context) -> Result<Line, ParseError> {
         match self {
-            ParseResult::Formula(f) => Ok(Line::Formula(f.finish(g, ctx.num_free_vars))),
+            ParseResult::Formula(f) => Ok(Line::Formula(f)),
             ParseResult::Forall(x, lines) => Ok(Line::Forall(x, Script::new(lines))),
             ParseResult::Imp(hyp, lines) => Ok(Line::Imp(hyp, Script::new(lines))),
             _ => Err(ParseError::UnexpectedProofElement),
@@ -219,23 +218,17 @@ impl<'a> Parser<'a> {
         Err(ParseError::ExpectingToken(t))
     }
 
-    /**
-     * Pushes an incomplete formula with one term left.
-     *
-     * So you can push onto it whatever it is that you want to check the type of.
-     */
-    fn parse_type_onto(
+    fn parse_type(
         &mut self,
-        fb: &mut FormulaBuilder,
         g: &Globals,
         ctx: &Context,
-    ) -> Result<(), ParseError> {
+        x: Formula<'_>,
+    ) -> Result<FormulaPackage, ParseError> {
         match self.token(ctx)? {
             Token::Word(Word::Global(sym)) => {
                 let arity = g.get_arity(sym);
                 if arity == 1 {
-                    fb.push_global(g, sym);
-                    Ok(())
+                    Ok(FormulaPackage::global(g, sym, ctx.num_free_vars, &[x]))
                 } else {
                     Err(ParseError::TypeMustBeUnary)
                 }
@@ -244,7 +237,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_term(&mut self, g: &Globals, ctx: &Context) -> Result<FormulaBuilder, ParseError> {
+    fn parse_term(&mut self, g: &Globals, ctx: &Context) -> Result<FormulaPackage, ParseError> {
         Ok(self.parse_term_or_line(g, ctx, false)?.expect_formula())
     }
 
@@ -254,16 +247,16 @@ impl<'a> Parser<'a> {
         ctx: &Context,
         allow_line: bool,
     ) -> Result<ParseResult, ParseError> {
-        let mut fb = FormulaBuilder::default();
         match self.token(ctx)? {
-            Token::Number(n) => fb.push_literal_u32(g, n),
+            Token::Number(n) => Ok(ParseResult::Formula(FormulaPackage::literal_u32(n, ctx.num_free_vars))),
             Token::Word(Word::Global(sym)) => {
-                fb.push_global(g, sym);
                 let arity = g.get_arity(sym);
+                let mut params = Vec::with_capacity(arity as usize);
                 if arity != 0 {
                     self.insist(ctx, Token::Char('('))?;
                     for i in 0..arity {
-                        let t = self.parse_formula_onto(&mut fb, g, ctx, Tightness::Formula)?;
+                        let (param,t) = self.parse_formula(g, ctx, Tightness::Formula)?;
+                        params.push(param);
                         if i == arity - 1 {
                             if t != Token::Char(')') {
                                 return Err(ParseError::ExpectingToken(Token::Char(')')));
@@ -273,15 +266,19 @@ impl<'a> Parser<'a> {
                         }
                     }
                 }
+                let fp = FormulaPackage::global_pkgs(g, sym, ctx.num_free_vars, &params);
+                Ok(ParseResult::Formula(fp))
             }
             Token::Word(Word::FreeVar(x)) => {
-                fb.push_free_var(g, x);
+                let fp = FormulaPackage::free_var(x, ctx.num_free_vars);
+                Ok(ParseResult::Formula(fp))
             }
             Token::Char('(') => {
-                let t = self.parse_formula_onto(&mut fb, g, ctx, Tightness::Formula)?;
+                let (fp, t) = self.parse_formula(g, ctx, Tightness::Formula)?;
                 if t != Token::Char(')') {
                     return Err(ParseError::ExpectingToken(Token::Char(')')));
                 }
+                Ok(ParseResult::Formula(fp))
             }
             Token::Char('{') => {
                 if !allow_line {
@@ -297,22 +294,16 @@ impl<'a> Parser<'a> {
                 Token::UndefinedSymbol(x) => {
                     self.insist(ctx, Token::Char(':'))?;
                     let (ctx2, var) = ctx.with_free_var(x)?;
-                    let mut fb2 = FormulaBuilder::default();
-                    self.parse_type_onto(&mut fb2, g, ctx)?;
-                    fb2.push_free_var(g, var);
+                    let fp2 = self.parse_type(g, &ctx2, FormulaPackage::free_var(var, ctx2.num_free_vars).formula())?;
                     match self.parse_term_or_line(g, &ctx2, allow_line)? {
-                        ParseResult::Formula(fb3) => {
-                            let mut fb4 = FormulaBuilder::default();
-                            fb4.push_global(g, globals::RIMP);
-                            fb4.push_completed_builder(g, &fb3);
-                            fb4.push_completed_builder(g, &fb2);
-                            fb.quantify_completed_free_var(g, &fb4, var, false);
+                        ParseResult::Formula(fp3) => {
+                            Ok(ParseResult::Formula(FormulaPackage::forall(var, FormulaPackage::imp(fp2.formula(), fp3.formula()).formula())))
                         }
                         ParseResult::Box(lines) => {
                             return Ok(ParseResult::Forall(
                                 var,
                                 vec![Line::Imp(
-                                    fb2.finish(g, ctx2.num_free_vars),
+                                    fp2,
                                     Script::new(lines),
                                 )],
                             ));
@@ -327,13 +318,10 @@ impl<'a> Parser<'a> {
                 Token::UndefinedSymbol(x) => {
                     self.insist(ctx, Token::Char(':'))?;
                     let (ctx2, var) = ctx.with_free_var(x)?;
-                    let mut fb2 = FormulaBuilder::default();
-                    fb2.push_global(g, globals::AND);
-                    self.parse_type_onto(&mut fb2, g, ctx)?;
-                    fb2.push_free_var(g, var);
-                    let fb3 = self.parse_term(g, &ctx2)?;
-                    fb2.push_completed_builder(g, &fb3);
-                    fb.quantify_completed_free_var(g, &fb2, var, true);
+                    let fp2 = self.parse_type(g, &ctx2, FormulaPackage::free_var(var, ctx2.num_free_vars).formula())?;
+                    let fp3 = self.parse_term(g, &ctx2)?;
+
+                    Ok(ParseResult::Formula(FormulaPackage::exists(var, FormulaPackage::and(fp2.formula(), fp3.formula()).formula())))
                 }
                 Token::Word(_) => return Err(ParseError::AlreadyDefined),
                 _ => return Err(ParseError::ExpectingFreshName),
@@ -354,9 +342,9 @@ impl<'a> Parser<'a> {
             }
             _ => return Err(ParseError::ExpectingTerm),
         }
-        Ok(ParseResult::Formula(fb))
     }
 
+    /*
     fn parse_formula_onto(
         &mut self,
         fb: &mut FormulaBuilder,
@@ -368,13 +356,14 @@ impl<'a> Parser<'a> {
         fb.push_completed_builder(g, &f);
         Ok(t)
     }
+    */
 
     fn parse_formula(
         &mut self,
         g: &Globals,
         ctx: &Context,
         tightness: Tightness,
-    ) -> Result<(FormulaBuilder, Token), ParseError> {
+    ) -> Result<(FormulaPackage, Token), ParseError> {
         let (r, t) = self.parse_formula_or_line(g, ctx, tightness, false)?;
         Ok((
             r.expect_formula(),
@@ -390,7 +379,7 @@ impl<'a> Parser<'a> {
         allow_line: bool,
     ) -> Result<(ParseResult, Option<Token>), ParseError> {
         let r = self.parse_term_or_line(g, ctx, allow_line)?;
-        if let ParseResult::Formula(mut fb) = r {
+        if let ParseResult::Formula(mut fp) = r {
             let mut t = self.token(ctx)?;
             loop {
                 match binop(&t) {
@@ -404,26 +393,17 @@ impl<'a> Parser<'a> {
                             )?;
                             match pair.0 {
                                 ParseResult::Formula(f) => {
-                                    let mut fb2 = FormulaBuilder::default();
-                                    mem::swap(&mut fb2, &mut fb);
-                                    fb.push_global(g, sym);
-                                    if reverse {
-                                        fb.push_completed_builder(g, &f);
-                                        fb.push_completed_builder(
-                                            g, &fb2, /* used to be called fb */
-                                        );
+                                    fp = if reverse {
+                                        FormulaPackage::global(g, sym, ctx.num_free_vars, &[f.formula(), fp.formula()])
                                     } else {
-                                        fb.push_completed_builder(
-                                            g, &fb2, /* used to be called fb */
-                                        );
-                                        fb.push_completed_builder(g, &f);
-                                    }
+                                        FormulaPackage::global(g, sym, ctx.num_free_vars, &[fp.formula(), f.formula()])
+                                    };
                                     t = pair.1.unwrap();
                                 }
                                 ParseResult::Box(lines) => {
                                     if allow_line && t == Token::Arrow {
                                         let result = ParseResult::Imp(
-                                            fb.finish(g, ctx.num_free_vars),
+                                            fp,
                                             lines,
                                         );
                                         return Ok((result, pair.1));
@@ -434,10 +414,10 @@ impl<'a> Parser<'a> {
                                 _ => return Err(ParseError::UnexpectedProofElement),
                             }
                         } else {
-                            return Ok((ParseResult::Formula(fb), Some(t)));
+                            return Ok((ParseResult::Formula(fp), Some(t)));
                         }
                     }
-                    None => return Ok((ParseResult::Formula(fb), Some(t))),
+                    None => return Ok((ParseResult::Formula(fp), Some(t))),
                 }
             }
         } else {
@@ -449,13 +429,12 @@ impl<'a> Parser<'a> {
         &mut self,
         g: &Globals,
         ctx: &Context,
-    ) -> Result<FormulaBuilder, ParseError> {
-        let mut fb = FormulaBuilder::default();
-        let t = self.parse_formula_onto(&mut fb, g, ctx, Tightness::Formula)?;
+    ) -> Result<FormulaPackage, ParseError> {
+        let (fp,t) = self.parse_formula(g, ctx, Tightness::Formula)?;
         if t != Token::Eof {
             return Err(ParseError::ExpectingEof);
         }
-        Ok(fb)
+        Ok(fp)
     }
 
     fn parse_script(
@@ -522,8 +501,7 @@ pub fn parse(text: &str) -> Result<(Globals, Script), ErrorWithContext> {
 pub fn parse_sentence(g: &Globals, text: &str) -> Result<FormulaPackage, ParseError> {
     let ctx = Context::new(g);
     let mut parser = Parser::new(text);
-    let fb = parser.parse_entire_formula(g, &ctx)?;
-    Ok(fb.finish(g, 0))
+    parser.parse_entire_formula(g, &ctx)
 }
 
 #[cfg(test)]
