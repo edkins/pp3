@@ -382,31 +382,33 @@ impl FormulaPackage {
      * Substitute values for (some of) the free variables in the given formula.
      *
      * The length of `fs` determines the number of free variables to substitute.
-     * `f` must have at least that many variables.
+     * `f` must have that many free variables plus `num_common_free_vars`.
      *
-     * `num_resulting_free_vars` is currently all of the following things:
-     * 
-     * - the number of free vars in the result
-     * - the number of free fars in `f`, minus `fs.len()`
-     * - the number of free vars in each of `fs`
-     * - the number of "common" free vars, which have the same meaning in each formula
-     *
-     * (I haven't decided a sensible way of handling the cases where these are different).
+     * In the following illustration:
+     * - c are the `num_common_free_vars`
+     * - f are the `num_resulting_free_vars` minus `num_common_free_vars`
+     * - s are the variables to substitute. There are `fs.len()` of these
+     * - b are the bound variables
      *
      * f:     cccccsssbbbbb
-     * fs[0]: cccccbbbb
-     * fs[1]: cccccbbbbbbbbb
-     * fs[2]: cccccbb
+     * fs[0]: cccccffbbbb
+     * fs[1]: cccccffbbbbbbbbb
+     * fs[2]: cccccffbb
      *
-     * result:cccccbbbbbbbbb
+     * result:cccccffbbbbbbbbb
      */
     pub fn subst_free_vars(
         f: impl ToFormula,
         fs: &[impl ToFormula],
+        num_common_free_vars: u32,
         num_resulting_free_vars: u32,
     ) -> Self {
-        if fs.len() > f.num_free_vars() as usize {
-            panic!("Substituting too many vars");
+        let num_subst_vars = fs.len() as u32;
+        if num_common_free_vars > num_resulting_free_vars {
+            panic!("num_common_free_vars > num_resulting_free_vars");
+        }
+        if num_common_free_vars + num_subst_vars != f.num_free_vars() {
+            panic!("Substituting the wrong number of vars");
         }
         for fi in fs {
             if fi.num_free_vars() != num_resulting_free_vars {
@@ -416,13 +418,12 @@ impl FormulaPackage {
         /*if num_resulting_free_vars < f.num_free_vars() {
             panic!("Too many free vars in formula that's being substituted into");
         }*/
-        let start_index = f.num_free_vars() - (fs.len() as u32);
-        if start_index != num_resulting_free_vars {
+        let start_index = f.num_free_vars() - num_subst_vars;
+        if start_index != num_common_free_vars {
             panic!("Wrong number of free vars in original formula {} vs {}", start_index, num_resulting_free_vars);
         }
         let end_index = f.num_free_vars();
         let mut vec = vec![];
-        let difference = end_index - num_resulting_free_vars;
         for item in f.formula().iter() {
             if let Some(varnum) = item.get_var_num() {
                 if varnum < start_index {
@@ -431,7 +432,7 @@ impl FormulaPackage {
                     let i = (varnum - start_index) as usize;
                     fs[i].append_onto(&mut vec, num_resulting_free_vars);
                 } else {
-                    vec.push(Sym::var(varnum - difference).0);
+                    vec.push(Sym::var(varnum + num_resulting_free_vars - end_index).0);
                 }
             } else {
                 vec.push(item.0);
@@ -443,18 +444,25 @@ impl FormulaPackage {
         }
     }
 
+    /**
+     * Take a formula quantified by forall or exists, strip off the quantifier and then substitute
+     * the newly exposed variable for the given expression.
+     *
+     * `existential` must be true iff the formula is existential. False if it's forall.
+     */
     pub fn subst_quantified_var(
         g: &Globals,
         f: impl ToFormula,
         f2: impl ToFormula,
         existential: bool,
     ) -> Self {
-        if f.num_free_vars() != f2.num_free_vars() {
+        if f.num_free_vars() > f2.num_free_vars() {
             panic!("subst_quantified_var free var mismatch");
         }
         let f1 = f.peel_quantifier(existential);
+        let num_common_free_vars = f1.num_free_vars() - 1;
         let num_free_vars = f2.num_free_vars();
-        FormulaPackage::subst_free_vars(f1, &[f2], num_free_vars)
+        FormulaPackage::subst_free_vars(f1, &[f2], num_common_free_vars, num_free_vars)
     }
 
     /*
@@ -512,7 +520,7 @@ impl<'a> Formula<'a> {
         let mut result = String::new();
         let garbage = slice_to_string(&mut result, self.slice, g, self.num_free_vars, 0);
         if !garbage.is_empty() {
-            panic!("Trailing garbage when printing formula");
+            panic!("Trailing garbage when printing formula {}", result);
         }
         result
     }
@@ -646,7 +654,7 @@ fn slice_to_string<'a>(
 pub fn first_term_len(g: &Globals, slice: &[u32]) -> usize {
     let item = Sym(slice[0]);
     if item.is_quantifier() {
-        2 + first_term_len(g, &slice[1..])
+        1 + first_term_len(g, &slice[1..])
     } else {
         let mut result = 1;
         for _ in 0..item.arity(g) {
@@ -830,7 +838,7 @@ mod tests {
 
         let fp2 = FormulaPackage::literal_u32(3, 0);
 
-        let fp3 = FormulaPackage::subst_free_vars(fp, &[fp2], 0);
+        let fp3 = FormulaPackage::subst_free_vars(fp, &[fp2], 0, 0);
 
         assert_eq!(fp3.num_free_vars, 0);
         assert_eq!(fp3.to_string(g), "3");

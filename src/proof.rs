@@ -163,7 +163,7 @@ impl ProofContext {
         let hyp = &self.facts[j].fact;
         reader.expect_rimp(g).expect("Expecting rimp");
         let conc = reader.read_formula(g, num_free_vars);
-        println!("conc: {}", conc.to_string(g));
+        //println!("conc: {}", conc.to_string(g));
         reader.expect_formula(g, hyp).expect("Hyp mismatch");
         reader.end();
         let fact = conc.package(g);
