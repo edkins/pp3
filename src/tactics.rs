@@ -1,4 +1,4 @@
-use crate::formula::{Formula, FormulaPackage, FormulaReader, FreeVar, Outermost, ToFormula};
+use crate::formula::{Formula, FormulaPackage, FormulaReader, Outermost, ToFormula};
 use crate::globals::Globals;
 use crate::proof::ProofContext;
 use crate::script::{Line, Script};
@@ -125,11 +125,10 @@ fn gen_extra(g: &Globals, f: Formula<'_>, num_free_vars: u32) -> Vec<LayerDetail
     let mut result = vec![];
     match f.outermost() {
         Outermost::Forall => {
-            let var = FreeVar::new(num_free_vars);
             let fp = FormulaPackage::subst_quantified_var(
                 g,
                 f,
-                FormulaPackage::free_var(var, num_free_vars + 1).formula(),
+                FormulaPackage::free_var(num_free_vars, num_free_vars + 1).formula(),
                 false,
             );
             result.push(LayerDetail::Forall(fp));
@@ -222,8 +221,8 @@ impl TacticContext {
                     }
                     self.theorems.push(f.clone());*/
                 }
-                Line::Forall(x, bx) => {
-                    self.pc.begin_forall_box(g, *x);
+                Line::Forall(bx) => {
+                    self.pc.begin_forall_box(g);
                     let result = self.process(g, bx);
                     self.pc.end_forall_box(g);
                     result?;

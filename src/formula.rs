@@ -1,5 +1,4 @@
 use crate::globals::{self, GlobalSymbol, Globals};
-use std::fmt;
 
 mod sym {
     use super::*;
@@ -32,14 +31,11 @@ mod sym {
     const LITERAL: u32 = 0x0100_0000;
 
     /**
-     * A bound variable. The detail defines which it is (where 0 is the innermost variable).
+     * A free or bound variable. The detail defines which it is (where 0 is the outermost variable).
+     *
+     * `num_free_vars` defines whether it's free or bound. (It's bound if it's >= num_free_vars).
      */
-    const BOUNDVAR: u32 = 0x0300_0000;
-
-    /**
-     * A free variable.
-     */
-    const FREEVAR: u32 = 0x0400_0000;
+    const VAR: u32 = 0x0300_0000;
 
     /**
      * A global symbol.
@@ -56,11 +52,6 @@ mod sym {
      */
     const EXISTS: u32 = 0x0700_0000;
 
-    /**
-     * The end of a "forall" or "exists" block. The detail is always 0.
-     */
-    const SCOPEEND: u32 = 0x0800_0000;
-
     #[derive(Clone, Copy, Eq, PartialEq)]
     pub struct Sym(pub u32);
 
@@ -72,18 +63,11 @@ mod sym {
             Sym(LITERAL + n)
         }
 
-        pub fn free_var(var: FreeVar) -> Sym {
-            if var.index() > MAX_VARNUM {
-                panic!("Free var too big");
-            }
-            Sym(FREEVAR + var.index())
-        }
-
-        pub fn bound_var(n: u32) -> Sym {
+        pub fn var(n: u32) -> Sym {
             if n > MAX_VARNUM {
-                panic!("Bound var too big");
+                panic!("Var too big");
             }
-            Sym(BOUNDVAR + n)
+            Sym(VAR + n)
         }
 
         pub fn global(gs: GlobalSymbol) -> Sym {
@@ -113,10 +97,6 @@ mod sym {
             }
         }
 
-        pub fn scope_end() -> Sym {
-            Sym(SCOPEEND)
-        }
-
         fn kind(self) -> u32 {
             self.0 & KIND
         }
@@ -127,7 +107,7 @@ mod sym {
 
         pub fn arity(self, g: &Globals) -> u32 {
             match self.kind() {
-                LITERAL | BOUNDVAR | FREEVAR => 0,
+                LITERAL | VAR => 0,
                 GLOBAL => g.get_arity(g.global(self.detail())),
                 _ => panic!("Cannot get arity of this symbol"),
             }
@@ -141,16 +121,8 @@ mod sym {
             }
         }
 
-        pub fn get_free_var_num(self) -> Option<u32> {
-            if self.kind() == FREEVAR {
-                Some(self.detail())
-            } else {
-                None
-            }
-        }
-
-        pub fn get_bound_var_num(self) -> Option<u32> {
-            if self.kind() == BOUNDVAR {
+        pub fn get_var_num(self) -> Option<u32> {
+            if self.kind() == VAR {
                 Some(self.detail())
             } else {
                 None
@@ -215,6 +187,37 @@ pub trait ToFormula {
     fn get(&self, i: usize) -> Sym {
         Sym(self.formula().slice[i])
     }
+
+    fn append_onto(&self, vec: &mut Vec<u32>, num_free_vars: u32) {
+        if self.num_free_vars() == num_free_vars {
+            vec.extend_from_slice(self.formula().slice);
+        } else if self.num_free_vars() < num_free_vars {
+            let difference = num_free_vars - self.num_free_vars();
+            for item in self.formula().iter() {
+                if let Some(varnum) = item.get_var_num() {
+                    if varnum >= self.num_free_vars() {
+                        vec.push(Sym::var(varnum + difference).0);
+                    } else {
+                        vec.push(item.0);
+                    }
+                } else {
+                    vec.push(item.0);
+                }
+            }
+        } else {
+            panic!("Cannot have more free vars than the vec we are appending onto");
+        }
+    }
+
+    fn peel_quantifier(&self, existential: bool) -> Formula<'_> {
+        if !self.get(0).is_specific_quantifier(existential) {
+            panic!("Not correct quantifier");
+        }
+        Formula {
+            slice: &self.formula().slice[1..],
+            num_free_vars: self.num_free_vars() + 1,
+        }
+    }
 }
 
 impl<'a> ToFormula for Formula<'a> {
@@ -239,11 +242,6 @@ impl<'a> ToFormula for &'a FormulaPackage {
             num_free_vars: self.num_free_vars,
         }
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct FreeVar {
-    var: u32,
 }
 
 pub enum Outermost {
@@ -289,111 +287,81 @@ impl FormulaPackage {
         }
         let mut vec = vec![sym.0];
         for param in params {
-            if param.num_free_vars() != num_free_vars {
-                panic!("Free var count mismatch in global");
-            }
-            vec.extend_from_slice(param.formula().slice);
+            param.append_onto(&mut vec, num_free_vars);
         }
         FormulaPackage { vec, num_free_vars }
     }
 
-    pub fn imp(hyp: impl ToFormula, conc: impl ToFormula) -> Self {
-        if hyp.num_free_vars() != conc.num_free_vars() {
-            panic!("Free var count mismatch in imp");
-        }
+    pub fn imp(num_free_vars: u32, hyp: impl ToFormula, conc: impl ToFormula) -> Self {
         let mut vec = vec![Sym::rimp().0];
-        vec.extend_from_slice(conc.formula().slice);
-        vec.extend_from_slice(hyp.formula().slice);
+        conc.append_onto(&mut vec, num_free_vars);
+        hyp.append_onto(&mut vec, num_free_vars);
         FormulaPackage {
             vec,
-            num_free_vars: conc.num_free_vars(),
-        }
-    }
-
-    pub fn and(x: impl ToFormula, y: impl ToFormula) -> Self {
-        if x.num_free_vars() != y.num_free_vars() {
-            panic!("Free var count mismatch in and");
-        }
-        let mut vec = vec![Sym::global(globals::AND).0];
-        vec.extend_from_slice(x.formula().slice);
-        vec.extend_from_slice(y.formula().slice);
-        FormulaPackage {
-            vec,
-            num_free_vars: x.num_free_vars(),
-        }
-    }
-
-    pub fn not(x: impl ToFormula) -> Self {
-        let mut vec = vec![Sym::global(globals::NOT).0];
-        vec.extend_from_slice(x.formula().slice);
-        FormulaPackage {
-            vec,
-            num_free_vars: x.num_free_vars(),
-        }
-    }
-
-    pub fn eq(x: impl ToFormula, y: impl ToFormula) -> Self {
-        if x.num_free_vars() != y.num_free_vars() {
-            panic!("Free var count mismatch in eq");
-        }
-        let mut vec = vec![Sym::global(globals::EQ).0];
-        vec.extend_from_slice(x.formula().slice);
-        vec.extend_from_slice(y.formula().slice);
-        FormulaPackage {
-            vec,
-            num_free_vars: x.num_free_vars(),
-        }
-    }
-
-    pub fn free_var(var: FreeVar, num_free_vars: u32) -> Self {
-        if var.index() >= num_free_vars {
-            panic!("Free var out of range");
-        }
-        FormulaPackage {
-            vec: vec![Sym::free_var(var).0],
             num_free_vars,
         }
     }
 
-    fn quantify(var: FreeVar, f: impl ToFormula, existential: bool) -> Self {
-        if var.index() + 1 != f.num_free_vars() {
-            panic!("Binding the wrong variable in forall");
-        }
-        let mut vec = vec![];
-        let exact = Sym::free_var(var);
-        let mut depth = 0;
-        vec.push(Sym::quantifier(existential).0);
-        for item in f.formula().iter() {
-            if item == exact {
-                vec.push(Sym::bound_var(depth).0);
-            } else {
-                if item.is_quantifier() {
-                    depth = depth.checked_add(1).expect("Depth should not exceed max");
-                } else if item == Sym::scope_end() {
-                    if depth == 0 {
-                        panic!("Depth should not be 0 here");
-                    }
-                    depth -= 1;
-                }
-                vec.push(item.0);
-            }
-        }
-        if depth != 0 {
-            panic!("Depth should be 0 here");
-        }
-        vec.push(Sym::scope_end().0);
+    pub fn and(num_free_vars: u32, x: impl ToFormula, y: impl ToFormula) -> Self {
+        let mut vec = vec![Sym::global(globals::AND).0];
+        x.append_onto(&mut vec, num_free_vars);
+        y.append_onto(&mut vec, num_free_vars);
         FormulaPackage {
             vec,
-            num_free_vars: f.num_free_vars() - 1,
+            num_free_vars,
         }
     }
 
-    pub fn forall(var: FreeVar, f: impl ToFormula) -> Self {
-        FormulaPackage::quantify(var, f, false)
+    pub fn not(num_free_vars: u32, x: impl ToFormula) -> Self {
+        let mut vec = vec![Sym::global(globals::NOT).0];
+        x.append_onto(&mut vec, num_free_vars);
+        FormulaPackage {
+            vec,
+            num_free_vars,
+        }
     }
 
-    pub fn exists(var: FreeVar, f: impl ToFormula) -> Self {
-        FormulaPackage::quantify(var, f, true)
+    pub fn eq(num_free_vars: u32, x: impl ToFormula, y: impl ToFormula) -> Self {
+        let mut vec = vec![Sym::global(globals::EQ).0];
+        x.append_onto(&mut vec, num_free_vars);
+        y.append_onto(&mut vec, num_free_vars);
+        FormulaPackage {
+            vec,
+            num_free_vars: x.num_free_vars(),
+        }
+    }
+
+    pub fn free_var(varnum: u32, num_free_vars: u32) -> Self {
+        if varnum >= num_free_vars {
+            panic!("Free var out of range");
+        }
+        FormulaPackage {
+            vec: vec![Sym::var(varnum).0],
+            num_free_vars,
+        }
+    }
+
+    fn quantify(num_free_vars: u32, f: impl ToFormula, existential: bool) -> Self {
+        if f.num_free_vars() != num_free_vars + 1 {
+            panic!("Wrong number of free vars in quantify");
+        }
+        let mut vec = vec![];
+        let exact = Sym::var(num_free_vars);
+        let mut depth = 0;
+        vec.push(Sym::quantifier(existential).0);
+        f.append_onto(&mut vec, num_free_vars + 1);
+        FormulaPackage {
+            vec,
+            num_free_vars,
+        }
+    }
+
+    pub fn forall(num_free_vars: u32, f: impl ToFormula) -> Self {
+        FormulaPackage::quantify(num_free_vars, f, false)
+    }
+
+    pub fn exists(num_free_vars: u32, f: impl ToFormula) -> Self {
+        FormulaPackage::quantify(num_free_vars, f, true)
     }
 
     pub fn truth(num_free_vars: u32) -> Self {
@@ -410,6 +378,28 @@ impl FormulaPackage {
         }
     }
 
+    /**
+     * Substitute values for (some of) the free variables in the given formula.
+     *
+     * The length of `fs` determines the number of free variables to substitute.
+     * `f` must have at least that many variables.
+     *
+     * `num_resulting_free_vars` is currently all of the following things:
+     * 
+     * - the number of free vars in the result
+     * - the number of free fars in `f`, minus `fs.len()`
+     * - the number of free vars in each of `fs`
+     * - the number of "common" free vars, which have the same meaning in each formula
+     *
+     * (I haven't decided a sensible way of handling the cases where these are different).
+     *
+     * f:     cccccsssbbbbb
+     * fs[0]: cccccbbbb
+     * fs[1]: cccccbbbbbbbbb
+     * fs[2]: cccccbb
+     *
+     * result:cccccbbbbbbbbb
+     */
     pub fn subst_free_vars(
         f: impl ToFormula,
         fs: &[impl ToFormula],
@@ -423,16 +413,25 @@ impl FormulaPackage {
                 panic!("Wrong number of free vars in substituted formula");
             }
         }
+        /*if num_resulting_free_vars < f.num_free_vars() {
+            panic!("Too many free vars in formula that's being substituted into");
+        }*/
         let start_index = f.num_free_vars() - (fs.len() as u32);
+        if start_index != num_resulting_free_vars {
+            panic!("Wrong number of free vars in original formula {} vs {}", start_index, num_resulting_free_vars);
+        }
         let end_index = f.num_free_vars();
         let mut vec = vec![];
+        let difference = end_index - num_resulting_free_vars;
         for item in f.formula().iter() {
-            if let Some(varnum) = item.get_free_var_num() {
-                if varnum >= start_index && varnum < end_index {
+            if let Some(varnum) = item.get_var_num() {
+                if varnum < start_index {
+                    vec.push(item.0)
+                } else if varnum < end_index {
                     let i = (varnum - start_index) as usize;
-                    vec.extend_from_slice(fs[i].formula().slice);
+                    fs[i].append_onto(&mut vec, num_resulting_free_vars);
                 } else {
-                    vec.push(item.0);
+                    vec.push(Sym::var(varnum - difference).0);
                 }
             } else {
                 vec.push(item.0);
@@ -444,6 +443,21 @@ impl FormulaPackage {
         }
     }
 
+    pub fn subst_quantified_var(
+        g: &Globals,
+        f: impl ToFormula,
+        f2: impl ToFormula,
+        existential: bool,
+    ) -> Self {
+        if f.num_free_vars() != f2.num_free_vars() {
+            panic!("subst_quantified_var free var mismatch");
+        }
+        let f1 = f.peel_quantifier(existential);
+        let num_free_vars = f2.num_free_vars();
+        FormulaPackage::subst_free_vars(f1, &[f2], num_free_vars)
+    }
+
+    /*
     pub fn subst_quantified_var(
         _g: &Globals,
         f: impl ToFormula,
@@ -482,6 +496,7 @@ impl FormulaPackage {
             num_free_vars: num_resulting_free_vars,
         }
     }
+    */
 }
 
 impl<'a> Formula<'a> {
@@ -495,7 +510,7 @@ impl<'a> Formula<'a> {
 
     pub fn to_string(self, g: &Globals) -> String {
         let mut result = String::new();
-        let garbage = slice_to_string(&mut result, self.slice, g, 0);
+        let garbage = slice_to_string(&mut result, self.slice, g, self.num_free_vars, 0);
         if !garbage.is_empty() {
             panic!("Trailing garbage when printing formula");
         }
@@ -510,17 +525,9 @@ impl<'a> Formula<'a> {
     }
 
     pub fn package(self, _g: &Globals) -> FormulaPackage {
-        let num_free_vars = self.num_free_vars;
-        for item in self.iter() {
-            if let Some(varnum) = item.get_free_var_num() {
-                if varnum >= num_free_vars {
-                    panic!("Free variable out of range");
-                }
-            }
-        }
         FormulaPackage {
             vec: self.slice.to_vec(),
-            num_free_vars,
+            num_free_vars: self.num_free_vars,
         }
     }
 
@@ -557,8 +564,8 @@ impl<'a> Formula<'a> {
         while i < self.len() {
             let item = other.get(j);
             j += 1;
-            let fv = item.get_free_var_num();
-            if fv.is_some() && fv.unwrap() >= common_free_vars {
+            let fv = item.get_var_num();
+            if fv.is_some() && fv.unwrap() >= common_free_vars && fv.unwrap() < self.num_free_vars {
                 let index = (fv.unwrap() - common_free_vars) as usize;
                 if let Some(f) = result[index] {
                     // Variable was seen before, so check we encounter the same thing
@@ -586,26 +593,6 @@ impl<'a> Formula<'a> {
     }
 }
 
-impl FreeVar {
-    pub fn new(var: u32) -> Self {
-        if var <= sym::MAX_VARNUM {
-            FreeVar { var }
-        } else {
-            panic!("Var out of range");
-        }
-    }
-
-    pub fn index(self) -> u32 {
-        self.var
-    }
-}
-
-impl fmt::Display for FreeVar {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", freevar_name(self.var))
-    }
-}
-
 fn boundvar_name(i: u32) -> String {
     format!("b{}", i)
 }
@@ -618,6 +605,7 @@ fn slice_to_string<'a>(
     result: &mut String,
     mut slice: &'a [u32],
     g: &Globals,
+    num_free_vars: u32,
     depth: u32,
 ) -> &'a [u32] {
     let item = slice[0];
@@ -626,13 +614,12 @@ fn slice_to_string<'a>(
     if let Some(n) = sym.get_literal_value() {
         result.push_str(&format!("{}", n));
         slice
-    } else if let Some(v) = sym.get_bound_var_num() {
-        result.push_str(&boundvar_name(
-            depth.checked_sub(1 + v).expect("Bound var out of range"),
-        ));
-        slice
-    } else if let Some(v) = sym.get_free_var_num() {
-        result.push_str(&freevar_name(v));
+    } else if let Some(v) = sym.get_var_num() {
+        if v < num_free_vars {
+            result.push_str(&freevar_name(v));
+        } else {
+            result.push_str(&boundvar_name(v - num_free_vars))
+        }
         slice
     } else if let Some(gnum) = sym.get_global_num() {
         let gsym = g.global(gnum);
@@ -642,7 +629,7 @@ fn slice_to_string<'a>(
             if i > 0 {
                 result.push(',');
             }
-            slice = slice_to_string(result, slice, g, depth);
+            slice = slice_to_string(result, slice, g, num_free_vars, depth);
         }
         result.push(')');
         slice
@@ -650,11 +637,7 @@ fn slice_to_string<'a>(
         result.push(if sym.is_forall() { '@' } else { '#' });
         result.push_str(&boundvar_name(depth));
         result.push('.');
-        slice = slice_to_string(result, slice, g, depth + 1);
-        if Sym(slice[0]) != Sym::scope_end() {
-            panic!("Expecting scope end at this point");
-        }
-        &slice[1..]
+        slice_to_string(result, slice, g, num_free_vars, depth + 1)
     } else {
         panic!("Unexpected kind: {:x}", item);
     }
@@ -777,8 +760,7 @@ mod tests {
     #[test]
     fn print_var0() {
         let g = &Globals::default();
-        let x = FreeVar::new(0);
-        let fp = FormulaPackage::free_var(x, 1);
+        let fp = FormulaPackage::free_var(0, 1);
         assert_eq!(fp.to_string(g), "f0");
     }
 
@@ -786,15 +768,13 @@ mod tests {
     #[should_panic]
     fn pkg_var0_panic() {
         let g = &Globals::default();
-        let x = FreeVar::new(0);
-        let _ = FormulaPackage::free_var(x, 0);
+        let _ = FormulaPackage::free_var(0, 0);
     }
 
     #[test]
     fn print_var0_forall() {
         let g = &Globals::default();
-        let x = FreeVar::new(0);
-        let fp = FormulaPackage::forall(x, FormulaPackage::free_var(x, 1));
+        let fp = FormulaPackage::forall(0, FormulaPackage::free_var(0, 1));
         assert_eq!(fp.num_free_vars, 0);
         assert_eq!(fp.to_string(g), "@b0.b0");
     }
@@ -802,8 +782,7 @@ mod tests {
     #[test]
     fn print_var0_exists() {
         let g = &Globals::default();
-        let x = FreeVar::new(0);
-        let fp = FormulaPackage::exists(x, FormulaPackage::free_var(x, 1));
+        let fp = FormulaPackage::exists(0, FormulaPackage::free_var(0, 1));
         assert_eq!(fp.num_free_vars, 0);
         assert_eq!(fp.to_string(g), "#b0.b0");
     }
@@ -811,7 +790,7 @@ mod tests {
     #[test]
     fn print_rimp() {
         let g = &Globals::default();
-        let fp = FormulaPackage::imp(FormulaPackage::truth(0), FormulaPackage::falsehood(0));
+        let fp = FormulaPackage::imp(0, FormulaPackage::truth(0), FormulaPackage::falsehood(0));
         assert_eq!(fp.to_string(g), "rimp(false(),true())");
     }
 
@@ -819,13 +798,13 @@ mod tests {
     #[should_panic]
     fn imp_mismatch() {
         let g = &Globals::default();
-        let _ = FormulaPackage::imp(FormulaPackage::truth(0), FormulaPackage::falsehood(1));
+        let _ = FormulaPackage::imp(0, FormulaPackage::truth(0), FormulaPackage::falsehood(1));
     }
 
     #[test]
     fn print_and() {
         let g = &Globals::default();
-        let fp = FormulaPackage::and(FormulaPackage::truth(0), FormulaPackage::falsehood(0));
+        let fp = FormulaPackage::and(0, FormulaPackage::truth(0), FormulaPackage::falsehood(0));
         assert_eq!(fp.to_string(g), "and(true(),false())");
     }
 
@@ -833,22 +812,21 @@ mod tests {
     #[should_panic]
     fn and_mismatch() {
         let g = &Globals::default();
-        let _ = FormulaPackage::and(FormulaPackage::truth(0), FormulaPackage::falsehood(1));
+        let _ = FormulaPackage::and(0, FormulaPackage::truth(0), FormulaPackage::falsehood(1));
     }
 
     #[test]
     fn print_not() {
         let g = &Globals::default();
-        let fp = FormulaPackage::not(FormulaPackage::falsehood(0));
+        let fp = FormulaPackage::not(0, FormulaPackage::falsehood(0));
         assert_eq!(fp.to_string(g), "not(false())");
     }
 
     #[test]
     fn var0_subst() {
         let g = &Globals::default();
-        let x = FreeVar::new(0);
 
-        let fp = FormulaPackage::free_var(x, 1);
+        let fp = FormulaPackage::free_var(0, 1);
 
         let fp2 = FormulaPackage::literal_u32(3, 0);
 
@@ -861,13 +839,12 @@ mod tests {
     #[test]
     fn print_free() {
         let g = &Globals::default();
-        let x = FreeVar::new(0);
         let fp = FormulaPackage::global(
             g,
             globals::ADD,
             1,
             &[
-                FormulaPackage::free_var(x, 1),
+                FormulaPackage::free_var(0, 1),
                 FormulaPackage::literal_u32(1, 1),
             ],
         );
@@ -877,15 +854,13 @@ mod tests {
     #[test]
     fn print_exists() {
         let g = &Globals::default();
-        let x = FreeVar::new(0);
-        let fp = FormulaPackage::exists(
-            x,
+        let fp = FormulaPackage::exists(0,
             FormulaPackage::global(
                 g,
                 globals::EQ,
                 1,
                 &[
-                    FormulaPackage::free_var(x, 1),
+                    FormulaPackage::free_var(0, 1),
                     FormulaPackage::literal_u32(37, 1),
                 ],
             ),
@@ -896,30 +871,25 @@ mod tests {
     #[test]
     fn print_forall() {
         let g = &Globals::default();
-        let x = FreeVar::new(0);
-        let fp = FormulaPackage::forall(x, FormulaPackage::not(FormulaPackage::free_var(x, 1)));
+        let fp = FormulaPackage::forall(0, FormulaPackage::not(1, FormulaPackage::free_var(0, 1)));
         assert_eq!(fp.to_string(g), "@b0.not(b0)");
     }
 
     #[test]
     fn print_bound_levels() {
         let g = &Globals::default();
-        let x = FreeVar::new(0);
-        let y = FreeVar::new(1);
 
-        let fp = FormulaPackage::forall(
-            x,
-            FormulaPackage::imp(
-                FormulaPackage::exists(
-                    y,
-                    FormulaPackage::eq(
-                        FormulaPackage::free_var(x, 2),
-                        FormulaPackage::free_var(y, 2),
+        let fp = FormulaPackage::forall(0,
+            FormulaPackage::imp(1,
+                FormulaPackage::exists(1,
+                    FormulaPackage::eq(2,
+                        FormulaPackage::free_var(0, 2),
+                        FormulaPackage::free_var(1, 2),
                     ),
                 ),
-                FormulaPackage::eq(
-                    FormulaPackage::free_var(x, 1),
-                    FormulaPackage::free_var(x, 1),
+                FormulaPackage::eq(1,
+                    FormulaPackage::free_var(0, 1),
+                    FormulaPackage::free_var(0, 1),
                 ),
             ),
         );
@@ -929,19 +899,17 @@ mod tests {
     #[test]
     fn subst_quantified() {
         let g = &Globals::default();
-        let x0 = FreeVar::new(0);
-        let x1 = FreeVar::new(1);
 
         let xyf = FormulaPackage::global(
             &g,
             globals::ADD,
             2,
             &[
-                FormulaPackage::free_var(x0, 2),
-                FormulaPackage::free_var(x1, 2),
+                FormulaPackage::free_var(0, 2),
+                FormulaPackage::free_var(1, 2),
             ],
         );
-        let allxf = FormulaPackage::forall(x0, FormulaPackage::free_var(x0, 1));
+        let allxf = FormulaPackage::forall(2, FormulaPackage::free_var(2, 3));
         let fp = FormulaPackage::subst_quantified_var(g, allxf, xyf, false);
         assert_eq!(fp.num_free_vars(), 2);
         assert_eq!(fp.to_string(g), "add(f0,f1)");
@@ -950,19 +918,17 @@ mod tests {
     #[test]
     fn subst_quantified_with_free() {
         let g = &Globals::default();
-        let x0 = FreeVar::new(0);
-        let x1 = FreeVar::new(1);
 
         let xyf = FormulaPackage::global(
             &g,
             globals::ADD,
             2,
             &[
-                FormulaPackage::free_var(x0, 2),
-                FormulaPackage::free_var(x1, 2),
+                FormulaPackage::free_var(0, 2),
+                FormulaPackage::free_var(1, 2),
             ],
         );
-        let ally = FormulaPackage::forall(x1, &xyf);
+        let ally = FormulaPackage::forall(1, &xyf);
         let fp = FormulaPackage::subst_quantified_var(g, ally, xyf, false);
         assert_eq!(fp.num_free_vars(), 2);
         assert_eq!(fp.to_string(g), "add(f0,add(f0,f1))");
@@ -971,8 +937,6 @@ mod tests {
     #[test]
     fn subst_quantified_with_bound_simple() {
         let g = &Globals::default();
-        let x0 = FreeVar::new(0);
-        let x1 = FreeVar::new(1);
 
         let lit = FormulaPackage::literal_u32(123, 0);
         let xyf = FormulaPackage::global(
@@ -980,11 +944,11 @@ mod tests {
             globals::ADD,
             2,
             &[
-                FormulaPackage::free_var(x0, 2),
-                FormulaPackage::free_var(x1, 2),
+                FormulaPackage::free_var(0, 2),
+                FormulaPackage::free_var(1, 2),
             ],
         );
-        let allxy = FormulaPackage::forall(x0, FormulaPackage::forall(x1, xyf));
+        let allxy = FormulaPackage::forall(0, FormulaPackage::forall(1, xyf));
         let fp = FormulaPackage::subst_quantified_var(g, allxy, lit, false);
         assert_eq!(fp.num_free_vars(), 0);
         assert_eq!(fp.to_string(g), "@b0.add(123,b0)");
@@ -993,19 +957,17 @@ mod tests {
     #[test]
     fn subst_quantified_with_bound() {
         let g = &Globals::default();
-        let x0 = FreeVar::new(0);
-        let x1 = FreeVar::new(1);
 
         let xyf = FormulaPackage::global(
             &g,
             globals::ADD,
             2,
             &[
-                FormulaPackage::free_var(x0, 2),
-                FormulaPackage::free_var(x1, 2),
+                FormulaPackage::free_var(0, 2),
+                FormulaPackage::free_var(1, 2),
             ],
         );
-        let allxy = FormulaPackage::forall(x0, FormulaPackage::forall(x1, &xyf));
+        let allxy = FormulaPackage::forall(0, FormulaPackage::forall(1, &xyf));
         let fp = FormulaPackage::subst_quantified_var(g, allxy, xyf, false);
         assert_eq!(fp.num_free_vars(), 2);
         assert_eq!(fp.to_string(g), "@b0.add(add(f0,f1),b0)");

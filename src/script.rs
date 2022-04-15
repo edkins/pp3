@@ -1,4 +1,4 @@
-use crate::formula::{FormulaPackage, FreeVar, ToFormula};
+use crate::formula::{FormulaPackage, ToFormula};
 use crate::globals::Globals;
 
 pub struct Script {
@@ -7,7 +7,7 @@ pub struct Script {
 
 pub enum Line {
     Formula(FormulaPackage),
-    Forall(FreeVar, Script),
+    Forall(Script),
     Imp(FormulaPackage, Script),
 }
 
@@ -28,8 +28,8 @@ impl Script {
         for line in &self.lines {
             match line {
                 Line::Formula(f) => println!("{spaces}{}", f.formula().to_string(g)),
-                Line::Forall(x, script) => {
-                    println!("{spaces}forall {x} {{");
+                Line::Forall(script) => {
+                    println!("{spaces}forall {{");
                     script.print(g, depth + 1);
                     println!("{spaces}}}");
                 }

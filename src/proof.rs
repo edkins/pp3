@@ -1,5 +1,5 @@
 use crate::axioms;
-use crate::formula::{Formula, FormulaPackage, FormulaReader, FreeVar, ToFormula};
+use crate::formula::{Formula, FormulaPackage, FormulaReader, ToFormula};
 use crate::globals::{self, Globals};
 
 pub struct ProofContext {
@@ -9,7 +9,7 @@ pub struct ProofContext {
 }
 
 pub enum ProofBox {
-    Forall(FreeVar),
+    Forall(u32),
     Imp(FormulaPackage),
 }
 
@@ -91,12 +91,9 @@ impl ProofContext {
         self.facts.len() - 1
     }
 
-    pub fn begin_forall_box(&mut self, _g: &Globals, var: FreeVar) {
-        if var.index() != self.num_free_vars {
-            panic!("Introducing the wrong variable");
-        }
+    pub fn begin_forall_box(&mut self, _g: &Globals) {
+        self.boxes.push(ProofBox::Forall(self.num_free_vars));
         self.num_free_vars += 1;
-        self.boxes.push(ProofBox::Forall(var));
     }
 
     pub fn end_imp_box(&mut self, _g: &Globals) -> usize {
@@ -111,7 +108,7 @@ impl ProofContext {
                         break;
                     }
                 }
-                let fact = FormulaPackage::imp(h, conclusion.fact);
+                let fact = FormulaPackage::imp(self.num_free_vars, h, conclusion.fact);
                 self.facts.push(Fact {
                     num_boxes: self.boxes.len(),
                     fact,
@@ -220,17 +217,6 @@ mod test {
     }
 
     #[test]
-    #[should_panic]
-    fn wrong_forall() {
-        let g = &Globals::default();
-        let mut pc = ProofContext::new(g);
-        let x = FreeVar::new(0);
-        pc.begin_forall_box(g, x);
-        let y = FreeVar::new(0);
-        pc.begin_forall_box(g, y);
-    }
-
-    #[test]
     fn swap_vars() {
         let g = &Globals::default();
         let mut pc = ProofContext::new(g);
@@ -238,18 +224,16 @@ mod test {
             pc.prev_conclusion(axioms::ADD_SUCC_R).to_string(g),
             "@b0.rimp(@b1.rimp(eq(add(b0,add(b1,1)),add(add(b0,b1),1)),nat(b1)),nat(b0))"
         );
-        let x = FreeVar::new(0);
-        let xfp = FormulaPackage::free_var(x, 1);
-        pc.begin_forall_box(g, x);
+        let xfp = FormulaPackage::free_var(0, 1);
+        pc.begin_forall_box(g);
         let xnat = pc.begin_imp_box(
             &g,
             FormulaPackage::global(&g, globals::NAT, 1, &[xfp]).formula(),
         );
 
-        let y = FreeVar::new(1);
-        let yfp = FormulaPackage::free_var(y, 2);
-        let xfp2 = FormulaPackage::free_var(x, 2);
-        pc.begin_forall_box(g, y);
+        let yfp = FormulaPackage::free_var(1, 2);
+        let xfp2 = FormulaPackage::free_var(0, 2);
+        pc.begin_forall_box(g);
         let ynat = pc.begin_imp_box(
             g,
             FormulaPackage::global(&g, globals::NAT, 2, &[&yfp]).formula(),

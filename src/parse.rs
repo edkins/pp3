@@ -1,4 +1,4 @@
-use crate::formula::{FormulaPackage, FreeVar, ToFormula};
+use crate::formula::{FormulaPackage, ToFormula};
 use crate::globals::{self, GlobalSymbol, Globals};
 use crate::script::{Line, Script};
 use std::collections::HashMap;
@@ -23,7 +23,7 @@ pub enum Token {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Word {
     Global(GlobalSymbol),
-    FreeVar(FreeVar),
+    FreeVar(u32),
 }
 
 #[derive(Debug)]
@@ -61,7 +61,7 @@ enum Tightness {
 
 enum ParseResult {
     Formula(FormulaPackage),
-    Forall(FreeVar, Vec<Line>),
+    Forall(Vec<Line>),
     Imp(FormulaPackage, Vec<Line>),
     Box(Vec<Line>),
     Eof,
@@ -79,7 +79,7 @@ impl ParseResult {
     fn into_line(self, _g: &Globals, _ctx: &Context) -> Result<Line, ParseError> {
         match self {
             ParseResult::Formula(f) => Ok(Line::Formula(f)),
-            ParseResult::Forall(x, lines) => Ok(Line::Forall(x, Script::new(lines))),
+            ParseResult::Forall(lines) => Ok(Line::Forall(Script::new(lines))),
             ParseResult::Imp(hyp, lines) => Ok(Line::Imp(hyp, Script::new(lines))),
             _ => Err(ParseError::UnexpectedProofElement),
         }
@@ -119,7 +119,7 @@ impl Context {
         self.map.get(x).cloned()
     }
 
-    fn with_free_var(&self, name: String) -> Result<(Self, FreeVar), ParseError> {
+    fn with_free_var(&self, name: String) -> Result<Self, ParseError> {
         if self.map.contains_key(&name) {
             return Err(ParseError::AlreadyDefined);
         }
@@ -127,15 +127,13 @@ impl Context {
         if self.num_free_vars > 0xffffff {
             return Err(ParseError::TooManyFreeVars);
         }
-        let x = FreeVar::new(self.num_free_vars);
-        map.insert(name, Word::FreeVar(x));
-        Ok((
+        map.insert(name, Word::FreeVar(self.num_free_vars));
+        Ok(
             Context {
                 map,
                 num_free_vars: self.num_free_vars + 1,
-            },
-            x,
-        ))
+            }
+        )
     }
 }
 
@@ -296,18 +294,17 @@ impl<'a> Parser<'a> {
             Token::Forall => match self.token(ctx)? {
                 Token::UndefinedSymbol(x) => {
                     self.insist(ctx, Token::Char(':'))?;
-                    let (ctx2, var) = ctx.with_free_var(x)?;
+                    let ctx2 = ctx.with_free_var(x)?;
                     let fp2 = self.parse_type(
                         g,
                         &ctx2,
-                        FormulaPackage::free_var(var, ctx2.num_free_vars),
+                        FormulaPackage::free_var(ctx.num_free_vars, ctx2.num_free_vars),
                     )?;
                     match self.parse_term_or_line(g, &ctx2, allow_line)? {
                         ParseResult::Formula(fp3) => Ok(ParseResult::Formula(
-                            FormulaPackage::forall(var, FormulaPackage::imp(fp2, fp3)),
+                            FormulaPackage::forall(ctx.num_free_vars, FormulaPackage::imp(ctx2.num_free_vars, fp2, fp3)),
                         )),
                         ParseResult::Box(lines) => Ok(ParseResult::Forall(
-                            var,
                             vec![Line::Imp(fp2, Script::new(lines))],
                         )),
                         _ => Err(ParseError::UnexpectedProofElement),
@@ -319,17 +316,16 @@ impl<'a> Parser<'a> {
             Token::Exists => match self.token(ctx)? {
                 Token::UndefinedSymbol(x) => {
                     self.insist(ctx, Token::Char(':'))?;
-                    let (ctx2, var) = ctx.with_free_var(x)?;
+                    let ctx2 = ctx.with_free_var(x)?;
                     let fp2 = self.parse_type(
                         g,
                         &ctx2,
-                        FormulaPackage::free_var(var, ctx2.num_free_vars),
+                        FormulaPackage::free_var(ctx.num_free_vars, ctx2.num_free_vars),
                     )?;
                     let fp3 = self.parse_term(g, &ctx2)?;
 
-                    Ok(ParseResult::Formula(FormulaPackage::exists(
-                        var,
-                        FormulaPackage::and(fp2, fp3),
+                    Ok(ParseResult::Formula(FormulaPackage::exists(ctx.num_free_vars,
+                        FormulaPackage::and(ctx2.num_free_vars, fp2, fp3),
                     )))
                 }
                 Token::Word(_) => Err(ParseError::AlreadyDefined),
@@ -589,7 +585,7 @@ mod test {
     #[test]
     fn var() {
         let g = &Globals::default();
-        let ctx = &Context::new(g).with_free_var("x".to_owned()).unwrap().0;
+        let ctx = &Context::new(g).with_free_var("x".to_owned()).unwrap();
         let mut p = Parser::new("x");
         let f = p.parse_entire_formula(g, ctx).unwrap();
         assert_eq!(f.to_string(g), "f0");
